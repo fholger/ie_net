@@ -1,0 +1,17 @@
+[package]
+name = "ie_net"
+version = "0.1.0"
+authors = ["Holger Frydrych <holger@frydrych.org>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytes = "0.5"
+anyhow = "1.0"
+libflate = "1.0"
+async-std = "1.6"
+futures = "0.3"
+log = "0.4"
+flexi_logger = "0.15"
+structopt = "0.3"
