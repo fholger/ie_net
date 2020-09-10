@@ -5,7 +5,7 @@ use structopt::StructOpt;
 
 #[derive(StructOpt, Debug)]
 struct Options {
-    #[structopt(short, long, default_value="127.0.0.1:17171")]
+    #[structopt(short, long, default_value = "127.0.0.1:17171")]
     /// Listening address/port to receive connections from game clients
     bind: String,
 }
