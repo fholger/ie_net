@@ -5,11 +5,13 @@ use std::io::{Cursor, Read};
 use libflate::zlib;
 use crate::server::ClientStatus;
 
+#[derive(Debug)]
 pub struct IdentClientParams {
     game_version: Uuid,
     language: String,
 }
 
+#[derive(Debug)]
 pub struct LoginClientParams {
     username: String,
     password: String,
@@ -51,6 +53,18 @@ fn try_parse_string(reader: &mut impl ReadBytesExt) -> Result<String> {
     Ok(String::from_utf8(str_data)?)
 }
 
+/// Earth uses Windows-style GUID binary representation for its game versions.
+/// So we need to carefully parse them to match our UUID format
+fn try_parse_guid(reader: &mut impl ReadBytesExt) -> Result<Uuid> {
+    let d1 = reader.read_u32::<LittleEndian>()?;
+    let d2 = reader.read_u16::<LittleEndian>()?;
+    let d3 = reader.read_u16::<LittleEndian>()?;
+    let mut d4 = [0; 8];
+    reader.read_exact(&mut d4)?;
+    let uuid = Uuid::from_fields(d1, d2, d3, &d4)?;
+    Ok(uuid)
+}
+
 impl LoginClientMessage {
     pub fn try_parse(data: &mut Vec<u8>, client_status: ClientStatus) -> Result<Option<Self>> {
         if data.len() < 4 {
@@ -77,7 +91,7 @@ impl LoginClientMessage {
 
     fn try_parse_ident(data: Vec<u8>) -> Result<IdentClientParams> {
         let mut cursor = Cursor::new(data);
-        let game_version = Uuid::from_u128(cursor.read_u128::<BigEndian>()?);
+        let game_version = try_parse_guid(&mut cursor)?;
         let language = try_parse_string(&mut cursor)?;
         Ok(IdentClientParams {
             game_version,

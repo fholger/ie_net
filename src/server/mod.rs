@@ -51,11 +51,12 @@ async fn client_login_handler(stream: TcpStream) -> Result<()> {
             log::info!("Client {} closed the connection", client_id);
             break;
         }
+        log::debug!("Received {} bytes from client {}", num_read, client_id);
         received.extend_from_slice(&read_buf[..num_read]);
 
         match LoginClientMessage::try_parse(&mut received, client_status)? {
-            Some(LoginClientMessage::Ident(params)) => continue,
-            Some(LoginClientMessage::Login(params)) => continue,
+            Some(LoginClientMessage::Ident(params)) => log::info!("Received ident message from {}: {:?}", client_id, params),
+            Some(LoginClientMessage::Login(params)) => log::info!("Received login message from {}: {:?}", client_id, params),
             None => continue,
         }
     }
