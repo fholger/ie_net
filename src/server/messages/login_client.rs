@@ -1,4 +1,4 @@
-use crate::server::ClientStatus;
+use crate::server::client::ClientStatus;
 use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use libflate::zlib;
