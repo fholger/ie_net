@@ -1,94 +1,106 @@
-use crate::server;
 use crate::server::broker::{Event, Receiver, Sender};
-use crate::server::messages::login_client::{
-    IdentClientParams, LoginClientMessage, LoginClientParams,
-};
+use crate::server::messages::login_client::{LoginClientMessage, IdentClientMessage};
 use crate::server::messages::login_server::{IdentServerParams, LoginServerMessage};
 use crate::server::messages::{ClientMessage, SendMessage, ServerMessage};
 use anyhow::Result;
-use async_std::io::BufReader;
+use async_std::io::{BufReader, ErrorKind};
 use async_std::net::TcpStream;
+use async_std::task;
 use futures::channel::mpsc;
 use futures::{AsyncReadExt, AsyncWrite, AsyncWriteExt, SinkExt, StreamExt};
 use uuid::Uuid;
+use async_std::io::Read;
+use crate::server::client::LoginStatus::LoggedIn;
+use LoginStatus::{Greeted, Connected};
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum ClientStatus {
-    Connected,
-    Greeted,
+#[derive(Debug)]
+enum LoginStatus {
+    Connected {
+        send: Sender<ServerMessage>,
+    },
+    Greeted {
+        send: Sender<ServerMessage>,
+        game_version: Uuid,
+    },
     LoggedIn,
 }
 
-pub async fn client_login_handler(stream: TcpStream, mut broker: Sender<Event>) -> Result<()> {
+pub async fn client_handler(stream: TcpStream, mut broker: Sender<Event>) -> Result<()> {
+    let (client_sender, client_receiver) = mpsc::unbounded();
     let client_id = Uuid::new_v4();
-    let mut client_status = ClientStatus::Connected;
+    let writer_handle = task::spawn(client_write_loop(client_id, stream.clone(), client_receiver));
+    let mut login_status = Connected { send: client_sender };
+
     let mut reader = BufReader::new(&stream);
-    let mut read_buf = [0u8; 1024];
     let mut received = Vec::with_capacity(1024);
 
-    let mut write_stream = stream.clone();
-
-    log::info!("Starting login for new client with id {}", client_id);
+    log::info!("Starting handler for new client with id {}", client_id);
 
     loop {
-        let num_read = reader.read(&mut read_buf).await?;
-        if num_read == 0 {
-            log::info!("Client {} closed the connection", client_id);
+        if !read_from_client(client_id, &mut reader, &mut received).await {
             break;
         }
-        received.extend_from_slice(&read_buf[..num_read]);
-
-        client_status = match LoginClientMessage::try_parse(&mut received, client_status)? {
-            Some(LoginClientMessage::Ident(params)) => {
-                handle_ident(client_id, params, &mut write_stream).await?
-            }
-            Some(LoginClientMessage::Login(params)) => {
-                handle_login(client_id, params, &mut write_stream).await?
-            }
-            None => continue,
-        };
-        log::debug!("New client status is {:?}", client_status);
-
-        if client_status == ClientStatus::LoggedIn {
-            log::info!("Login for client {} done, handing off...", client_id);
-            let (writer_sender, writer_receiver) = mpsc::unbounded();
-            broker
-                .send(Event::NewClient {
-                    uuid: client_id,
-                    messages: writer_sender,
-                })
-                .await?;
-            server::spawn_and_log_error(client_write_loop(stream.clone(), writer_receiver));
-            server::spawn_and_log_error(client_read_loop(client_id, stream, broker));
-            return Ok(());
-        }
+        login_status = process_messages(client_id, &mut received, &mut broker, login_status).await?;
     }
-    log::debug!("Client login handler finished for client {}", client_id);
-    Ok(())
+    log::info!("Client handler finished for client {}", client_id);
+    drop(broker);
+    writer_handle.await
 }
 
-async fn client_read_loop(id: Uuid, stream: TcpStream, _broker: Sender<Event>) -> Result<()> {
-    let mut reader = BufReader::new(&stream);
-    let mut read_buf = [0u8; 1024];
-    let mut received = Vec::with_capacity(1024);
-    loop {
-        let num_read = reader.read(&mut read_buf).await?;
-        if num_read == 0 {
-            log::info!("Client {} closed the connection", id);
-            break;
+async fn process_messages(client_id: Uuid, received: &mut Vec<u8>, broker: &mut Sender<Event>, mut login_status: LoginStatus) -> Result<LoginStatus> {
+    while received.len() > 0 {
+        login_status = match login_status {
+            Connected { mut send } => match IdentClientMessage::try_parse(received)? {
+                Some(ident) => {
+                    send.send(ServerMessage::Login(LoginServerMessage::Ident(IdentServerParams {}))).await?;
+                    Greeted { send, game_version: ident.game_version }
+                },
+                None => return Ok(Connected { send })
+            },
+            Greeted {send, game_version} => match LoginClientMessage::try_parse(received)?{
+                Some(login) => {
+                    broker.send(Event::NewClient { id: client_id, send, username: login.username }).await?;
+                    LoggedIn
+                },
+                None => return Ok(Greeted { send, game_version })
+            },
+            LoggedIn => {
+                match ClientMessage::try_parse(received)? {
+                    Some(_msg) => continue,
+                    None => break,
+                }
+            },
         }
-        received.extend_from_slice(&read_buf[..num_read]);
-        if let Some(_message) = ClientMessage::try_parse(&mut received)? {}
     }
-    Ok(())
+
+    Ok(login_status)
+}
+
+async fn read_from_client(client_id: Uuid, reader: &mut (impl Read + Unpin), received: &mut Vec<u8>) -> bool {
+    let mut read_buf = [0u8; 256];
+    let num_read = match reader.read(&mut read_buf).await {
+        Ok(0) => {
+            log::info!("Client {} closed the connection", client_id);
+            return false
+        },
+        Ok(n) => n,
+        Err(e) if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock => return true,
+        Err(e) => {
+            log::warn!("Error when reading from client {}: {}", client_id, e);
+            return false
+        }
+    };
+    received.extend_from_slice(&read_buf[..num_read]);
+    true
 }
 
 async fn client_write_loop(
+    client_id: Uuid,
     mut stream: TcpStream,
     mut messages: Receiver<ServerMessage>,
 ) -> Result<()> {
     while let Some(msg) = messages.next().await {
-        log::debug!("Sending message to client {}: {:?}", "0", msg);
+        log::debug!("Sending message to client {}: {:?}", client_id, msg);
         match msg {
             ServerMessage::Login(login_msg) => send_message(login_msg, &mut stream).await?,
             ServerMessage::Disconnect => {
@@ -107,26 +119,4 @@ async fn send_message(
     let bytes = message.prepare_message()?;
     writer.write_all(&bytes).await?;
     Ok(())
-}
-
-async fn handle_ident(
-    client_id: Uuid,
-    ident: IdentClientParams,
-    writer: &mut (impl AsyncWrite + Unpin),
-) -> Result<ClientStatus> {
-    log::debug!("Received ident message from {}: {:?}", client_id, ident);
-    // TODO: verify client game version
-    let response = LoginServerMessage::Ident(IdentServerParams {});
-    send_message(response, writer).await?;
-    Ok(ClientStatus::Greeted)
-}
-
-async fn handle_login(
-    client_id: Uuid,
-    login: LoginClientParams,
-    _writer: &mut (impl AsyncWrite + Unpin),
-) -> Result<ClientStatus> {
-    log::debug!("Received login message from {}: {:?}", client_id, login);
-    // TODO: verify login
-    Ok(ClientStatus::LoggedIn)
 }

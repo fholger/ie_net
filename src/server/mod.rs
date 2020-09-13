@@ -7,7 +7,7 @@ use async_std::future::Future;
 
 use async_std::{net::TcpListener, task};
 use broker::broker_loop;
-use client::client_login_handler;
+use client::client_handler;
 use futures::channel::mpsc;
 use futures::StreamExt;
 
@@ -27,7 +27,7 @@ async fn accept_loop(addr: &str) -> Result<()> {
     while let Some(connection) = incoming_connections.next().await {
         let connection = connection?;
         log::info!("New connection from {}", connection.peer_addr()?);
-        spawn_and_log_error(client_login_handler(connection, main_sender.clone()));
+        spawn_and_log_error(client_handler(connection, main_sender.clone()));
     }
 
     Ok(())

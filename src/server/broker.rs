@@ -14,35 +14,39 @@ pub type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
 pub enum Event {
     NewClient {
-        uuid: Uuid,
-        messages: Sender<ServerMessage>,
+        id: Uuid,
+        username: String,
+        send: Sender<ServerMessage>,
     },
 }
 
+struct Client {
+    username: String,
+    send: Sender<ServerMessage>,
+}
+
 pub async fn broker_loop(mut events: Receiver<Event>) -> Result<()> {
-    let mut clients: HashMap<Uuid, Sender<ServerMessage>> = HashMap::new();
+    let mut clients: HashMap<Uuid, Client> = HashMap::new();
     log::info!("Main server loop starting up");
 
     while let Some(event) = events.next().await {
         log::info!("New event");
         match event {
-            Event::NewClient { uuid, mut messages } => {
-                match clients.entry(uuid) {
+            Event::NewClient { id, username, mut send } => {
+                match clients.entry(id) {
                     Entry::Occupied(..) => {
                         // FIXME: actually need to check username, not id
-                        messages
-                            .send(ServerMessage::Login(LoginServerMessage::Reject(
+                        send.send(ServerMessage::Login(LoginServerMessage::Reject(
                                 RejectServerParams {
                                     reason: "Already logged in".to_string(),
                                 },
                             )))
                             .await?;
-                        messages.send(ServerMessage::Disconnect).await?;
+                        send.send(ServerMessage::Disconnect).await?;
                     }
                     Entry::Vacant(entry) => {
-                        log::info!("Client {} has successfully logged in", uuid);
-                        messages
-                            .send(ServerMessage::Login(LoginServerMessage::Welcome(
+                        log::info!("Client {} has successfully logged in", id);
+                        send.send(ServerMessage::Login(LoginServerMessage::Welcome(
                                 WelcomeServerParams {
                                     server_ident: "IE::Net".to_string(),
                                     welcome_message:
@@ -59,7 +63,7 @@ pub async fn broker_loop(mut events: Receiver<Event>) -> Result<()> {
                                 },
                             )))
                             .await?;
-                        entry.insert(messages);
+                        entry.insert(Client { username, send });
                     }
                 }
             }
