@@ -1,11 +1,7 @@
-mod broker;
-mod client;
-mod messages;
-
 use anyhow::Result;
 
-use broker::broker_loop;
-use client::client_handler;
+use crate::broker::broker_loop;
+use crate::client::client_handler;
 use std::future::Future;
 use tokio::net::TcpListener;
 use tokio::stream::StreamExt;

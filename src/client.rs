@@ -1,8 +1,8 @@
-use crate::server::broker::{Event, Receiver, Sender};
-use crate::server::client::LoginStatus::LoggedIn;
-use crate::server::messages::login_client::{IdentClientMessage, LoginClientMessage};
-use crate::server::messages::login_server::{IdentServerParams, LoginServerMessage};
-use crate::server::messages::{ClientMessage, SendMessage, ServerMessage};
+use crate::broker::{Event, Receiver, Sender};
+use crate::client::LoginStatus::LoggedIn;
+use crate::messages::login_client::{IdentClientMessage, LoginClientMessage};
+use crate::messages::login_server::{IdentServerParams, LoginServerMessage};
+use crate::messages::{ClientMessage, SendMessage, ServerMessage};
 use anyhow::Result;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ErrorKind};
 use tokio::net::tcp::OwnedWriteHalf;

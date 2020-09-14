@@ -1,7 +1,5 @@
-use crate::server::messages::login_server::{
-    LoginServerMessage, RejectServerParams, WelcomeServerParams,
-};
-use crate::server::messages::ServerMessage;
+use crate::messages::login_server::{LoginServerMessage, RejectServerParams, WelcomeServerParams};
+use crate::messages::ServerMessage;
 use anyhow::Result;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;

@@ -1,4 +1,4 @@
-use crate::server::messages::SendMessage;
+use crate::messages::SendMessage;
 use anyhow::Result;
 use byteorder::{LittleEndian, WriteBytesExt};
 use libflate::zlib;

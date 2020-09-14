@@ -1,3 +1,6 @@
+mod broker;
+mod client;
+mod messages;
 mod server;
 
 use anyhow::Result;
