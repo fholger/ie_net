@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use byteorder::{LittleEndian, ReadBytesExt};
+use bytes::Buf;
 use libflate::zlib;
 use std::io::{Cursor, Read};
 use uuid::Uuid;
@@ -23,8 +23,8 @@ fn decompress_bytes(compressed_bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(decompressed)
 }
 
-fn parse_string(reader: &mut impl ReadBytesExt) -> Result<String> {
-    let str_len = reader.read_u32::<LittleEndian>()?;
+fn parse_string(reader: &mut (impl Buf + Read)) -> Result<String> {
+    let str_len = reader.get_u32_le();
     let mut str_data = vec![0u8; str_len as usize];
     reader.read_exact(&mut str_data)?;
     Ok(String::from_utf8(str_data)?)
@@ -32,10 +32,10 @@ fn parse_string(reader: &mut impl ReadBytesExt) -> Result<String> {
 
 /// Earth uses Windows-style GUID binary representation for its game versions.
 /// So we need to carefully parse them to match our UUID format
-fn parse_guid(reader: &mut impl ReadBytesExt) -> Result<Uuid> {
-    let d1 = reader.read_u32::<LittleEndian>()?;
-    let d2 = reader.read_u16::<LittleEndian>()?;
-    let d3 = reader.read_u16::<LittleEndian>()?;
+fn parse_guid(reader: &mut (impl Buf + Read)) -> Result<Uuid> {
+    let d1 = reader.get_u32_le();
+    let d2 = reader.get_u16_le();
+    let d3 = reader.get_u16_le();
     let mut d4 = [0; 8];
     reader.read_exact(&mut d4)?;
     let uuid = Uuid::from_fields(d1, d2, d3, &d4)?;
@@ -48,7 +48,7 @@ fn try_decompress_block(data: &mut Vec<u8>) -> Result<Option<Vec<u8>>> {
     }
 
     let mut cursor = Cursor::new(&data);
-    let compressed_block_end = cursor.read_u32::<LittleEndian>()?;
+    let compressed_block_end = cursor.get_u32_le();
     if compressed_block_end > 4096 {
         return Err(anyhow!(
             "Suspiciously large block size, message is assumed invalid"

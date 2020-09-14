@@ -1,6 +1,6 @@
 use crate::messages::SendMessage;
 use anyhow::Result;
-use byteorder::{LittleEndian, WriteBytesExt};
+use bytes::BufMut;
 use libflate::zlib;
 use std::io;
 
@@ -38,15 +38,14 @@ fn compress_bytes(uncompressed_bytes: &[u8]) -> Result<Vec<u8>> {
     io::copy(&mut &uncompressed_bytes[..], &mut encoder)?;
     let mut compressed = encoder.finish().into_result()?;
     let mut final_bytes = Vec::new();
-    final_bytes.write_u32::<LittleEndian>(compressed.len() as u32 + 4)?;
+    final_bytes.put_u32_le(compressed.len() as u32 + 4);
     final_bytes.append(&mut compressed);
     Ok(final_bytes)
 }
 
-fn write_slice(data: &mut Vec<u8>, slice: &[u8]) -> Result<()> {
-    data.write_u32::<LittleEndian>(slice.len() as u32)?;
+fn write_slice(data: &mut Vec<u8>, slice: &[u8]) {
+    data.put_u32_le(slice.len() as u32);
     data.extend_from_slice(slice);
-    Ok(())
 }
 
 impl SendMessage for LoginServerMessage {
@@ -63,13 +62,13 @@ impl SendMessage for IdentServerParams {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         let mut message = Vec::new();
         // message OK status
-        message.write_u32::<LittleEndian>(0)?;
+        message.put_u32_le(0);
         // TODO: figure out what we should actually send here
-        message.write_u32::<LittleEndian>(16u32)?;
-        message.write_u32::<LittleEndian>(0x1aff3b3cu32)?;
-        message.write_u32::<LittleEndian>(0x1aff3b3cu32)?;
-        message.write_u32::<LittleEndian>(0x1aff3b3cu32)?;
-        message.write_u32::<LittleEndian>(0x1aff3b3cu32)?;
+        message.put_u32_le(16u32);
+        message.put_u32_le(0x1aff3b3cu32);
+        message.put_u32_le(0x1aff3b3cu32);
+        message.put_u32_le(0x1aff3b3cu32);
+        message.put_u32_le(0x1aff3b3cu32);
 
         Ok(compress_bytes(&message)?)
     }
@@ -78,63 +77,63 @@ impl SendMessage for IdentServerParams {
 impl SendMessage for WelcomeServerParams {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         let mut content = Vec::new();
-        write_slice(&mut content, &self.server_ident.as_bytes())?;
-        write_slice(&mut content, &self.welcome_message.as_bytes())?;
+        write_slice(&mut content, &self.server_ident.as_bytes());
+        write_slice(&mut content, &self.welcome_message.as_bytes());
         // some of these numbers are currently unknown
-        content.write_u64::<LittleEndian>(25)?;
-        content.write_u32::<LittleEndian>(24)?;
-        content.write_u32::<LittleEndian>(self.players_total)?;
-        content.write_u32::<LittleEndian>(self.players_online)?;
-        content.write_u32::<LittleEndian>(self.channels_total)?;
+        content.put_u64_le(25);
+        content.put_u32_le(24);
+        content.put_u32_le(self.players_total);
+        content.put_u32_le(self.players_online);
+        content.put_u32_le(self.channels_total);
         // total number of games part a
-        content.write_u32::<LittleEndian>(self.games_total)?;
+        content.put_u32_le(self.games_total);
         // total number of games part b (added to a, why?)
-        content.write_u32::<LittleEndian>(0)?;
-        content.write_u32::<LittleEndian>(18)?;
+        content.put_u32_le(0);
+        content.put_u32_le(18);
         // number of games available
-        content.write_u32::<LittleEndian>(self.games_available)?;
-        content.write_u32::<LittleEndian>(16)?;
+        content.put_u32_le(self.games_available);
+        content.put_u32_le(16);
 
         // list of game versions
         for (idx, version) in self.game_versions.iter().enumerate() {
-            content.write_u8(idx as u8)?;
-            write_slice(&mut content, version.as_bytes())?;
+            content.put_u8(idx as u8);
+            write_slice(&mut content, version.as_bytes());
         }
-        content.write_u8(0xff)?; // end of list marker
+        content.put_u8(0xff); // end of list marker
 
         // unknown list
         for (idx, version) in self.game_versions.iter().enumerate() {
-            content.write_u8(idx as u8)?;
-            write_slice(&mut content, version.as_bytes())?;
+            content.put_u8(idx as u8);
+            write_slice(&mut content, version.as_bytes());
         }
-        content.write_u8(0xff)?;
+        content.put_u8(0xff);
 
         // unknown list
         for (idx, version) in self.game_versions.iter().enumerate() {
-            content.write_u8(idx as u8)?;
-            write_slice(&mut content, version.as_bytes())?;
+            content.put_u8(idx as u8);
+            write_slice(&mut content, version.as_bytes());
         }
-        content.write_u8(0xff)?;
+        content.put_u8(0xff);
 
         // unknown byte
-        content.write_u8(0)?;
+        content.put_u8(0);
 
         // starting channel for the player
-        write_slice(&mut content, self.initial_channel.as_bytes())?;
+        write_slice(&mut content, self.initial_channel.as_bytes());
 
         // unknown u32
-        content.write_u32::<LittleEndian>(0)?;
+        content.put_u32_le(0);
         // unknown bytes, only if prev number is 0? otherwise string-like?
         content.extend_from_slice(&[0u8; 16]);
         // unknown u32
-        content.write_u32::<LittleEndian>(0)?;
+        content.put_u32_le(0);
         // unknown bytes, only if prev number is 0? otherwise string-like?
         content.extend_from_slice(&[0u8; 16]);
 
         let mut message = Vec::new();
         // message OK status
-        message.write_u32::<LittleEndian>(0)?;
-        write_slice(&mut message, &content)?;
+        message.put_u32_le(0);
+        write_slice(&mut message, &content);
 
         Ok(compress_bytes(&message)?)
     }
@@ -144,8 +143,8 @@ impl SendMessage for RejectServerParams {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         let mut content = Vec::new();
         // reject code
-        content.write_u32::<LittleEndian>(2)?;
-        write_slice(&mut content, self.reason.as_bytes())?;
+        content.put_u32_le(2);
+        write_slice(&mut content, self.reason.as_bytes());
 
         Ok(compress_bytes(&content)?)
     }
