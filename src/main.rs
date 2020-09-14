@@ -10,11 +10,12 @@ struct Options {
     bind: String,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let options = Options::from_args();
 
     flexi_logger::Logger::with_env_or_str("debug").start()?;
     log::info!("IE::Net server starting up...");
 
-    server::run(&options.bind)
+    server::run(&options.bind).await
 }

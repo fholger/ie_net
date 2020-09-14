@@ -50,7 +50,9 @@ fn try_decompress_block(data: &mut Vec<u8>) -> Result<Option<Vec<u8>>> {
     let mut cursor = Cursor::new(&data);
     let compressed_block_end = cursor.read_u32::<LittleEndian>()?;
     if compressed_block_end > 4096 {
-        return Err(anyhow!("Suspiciously large block size, message is assumed invalid"));
+        return Err(anyhow!(
+            "Suspiciously large block size, message is assumed invalid"
+        ));
     }
     if data.len() < compressed_block_end as usize {
         return Ok(None);
@@ -70,7 +72,7 @@ impl IdentClientMessage {
             return Ok(Some(IdentClientMessage {
                 game_version,
                 language,
-            }))
+            }));
         }
         Ok(None)
     }
@@ -82,7 +84,7 @@ impl LoginClientMessage {
             let mut cursor = Cursor::new(decompressed);
             let username = parse_string(&mut cursor)?;
             let password = parse_string(&mut cursor)?;
-            return Ok(Some(LoginClientMessage { username, password }))
+            return Ok(Some(LoginClientMessage { username, password }));
         }
         Ok(None)
     }
