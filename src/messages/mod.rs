@@ -1,3 +1,4 @@
+pub mod client;
 pub mod login_client;
 pub mod login_server;
 

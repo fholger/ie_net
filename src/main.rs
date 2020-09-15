@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate nom;
+
 mod broker;
 mod client;
 mod messages;
