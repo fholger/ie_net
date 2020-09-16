@@ -77,7 +77,7 @@ async fn process_messages(
                         .send(Event::NewClient {
                             id: client_id,
                             send,
-                            username: login.username,
+                            username: String::from_utf8(login.username)?,
                         })
                         .await?;
                     LoggedIn

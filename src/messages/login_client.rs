@@ -1,91 +1,138 @@
 use anyhow::{anyhow, Result};
-use bytes::Buf;
-use libflate::zlib;
-use std::io::{Cursor, Read};
 use uuid::Uuid;
+use nom::Err::{Incomplete};
+use nom::Needed::Size;
+use nom::IResult;
 
 #[derive(Debug)]
 pub struct IdentClientMessage {
     pub game_version: Uuid,
-    pub language: String,
+    pub language: Vec<u8>,
 }
 
 #[derive(Debug)]
 pub struct LoginClientMessage {
-    pub username: String,
-    pub password: String,
+    pub username: Vec<u8>,
+    pub password: Vec<u8>,
 }
 
-fn decompress_bytes(compressed_bytes: &[u8]) -> Result<Vec<u8>> {
-    let mut decoder = zlib::Decoder::new(compressed_bytes)?;
-    let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed)?;
-    Ok(decompressed)
-}
-
-fn parse_string(reader: &mut (impl Buf + Read)) -> Result<String> {
-    let str_len = reader.get_u32_le();
-    let mut str_data = vec![0u8; str_len as usize];
-    reader.read_exact(&mut str_data)?;
-    Ok(String::from_utf8(str_data)?)
-}
-
-/// Earth uses Windows-style GUID binary representation for its game versions.
-/// So we need to carefully parse them to match our UUID format
-fn parse_guid(reader: &mut (impl Buf + Read)) -> Result<Uuid> {
-    let d1 = reader.get_u32_le();
-    let d2 = reader.get_u16_le();
-    let d3 = reader.get_u16_le();
-    let mut d4 = [0; 8];
-    reader.read_exact(&mut d4)?;
-    let uuid = Uuid::from_fields(d1, d2, d3, &d4)?;
-    Ok(uuid)
-}
-
-fn try_decompress_block(data: &mut Vec<u8>) -> Result<Option<Vec<u8>>> {
-    if data.len() < 4 {
-        return Ok(None);
-    }
-
-    let mut cursor = Cursor::new(&data);
-    let compressed_block_end = cursor.get_u32_le();
-    if compressed_block_end > 4096 {
-        return Err(anyhow!(
-            "Suspiciously large block size, message is assumed invalid"
-        ));
-    }
-    if data.len() < compressed_block_end as usize {
-        return Ok(None);
-    }
-
-    let decompressed = decompress_bytes(&data[4..compressed_block_end as usize])?;
-    data.drain(..compressed_block_end as usize);
-    Ok(Some(decompressed))
+fn try_parse<T>(data: &mut Vec<u8>, parser: fn(&[u8]) -> IResult<&[u8], T>) -> Result<Option<T>> {
+    let (remaining, msg) = match parser(&data) {
+        Ok((remaining, ident)) => (remaining.len(), ident),
+        Err(Incomplete(Size(n))) if n > 1024 => return Err(anyhow!("Message size {} is too large, assuming error", n)),
+        Err(Incomplete(_)) => return Ok(None),
+        _ => return Err(anyhow!("Error parsing ident message")),
+    };
+    data.drain(.. data.len() - remaining);
+    Ok(Some(msg))
 }
 
 impl IdentClientMessage {
     pub fn try_parse(data: &mut Vec<u8>) -> Result<Option<Self>> {
-        if let Some(decompressed) = try_decompress_block(data)? {
-            let mut cursor = Cursor::new(decompressed);
-            let game_version = parse_guid(&mut cursor)?;
-            let language = parse_string(&mut cursor)?;
-            return Ok(Some(IdentClientMessage {
-                game_version,
-                language,
-            }));
-        }
-        Ok(None)
+        try_parse(data, parsers::compressed_ident_message)
     }
 }
 
 impl LoginClientMessage {
     pub fn try_parse(data: &mut Vec<u8>) -> Result<Option<Self>> {
-        if let Some(decompressed) = try_decompress_block(data)? {
-            let mut cursor = Cursor::new(decompressed);
-            let username = parse_string(&mut cursor)?;
-            let password = parse_string(&mut cursor)?;
-            return Ok(Some(LoginClientMessage { username, password }));
+        try_parse(data, parsers::compressed_login_message)
+    }
+}
+
+mod parsers {
+    use nom::combinator::{map_res};
+    use nom::multi::{count};
+    use nom::number::complete::{le_u16, le_u32, le_u8};
+    use nom::sequence::tuple;
+    use nom::IResult;
+    use uuid::Uuid;
+    use nom::bytes::complete::take;
+    use nom::number::streaming;
+    use libflate::zlib;
+    use std::io::Read;
+    use std::io;
+    use crate::messages::login_client::{IdentClientMessage, LoginClientMessage};
+
+    /// uses a Windows GUID byte representation, which is a weird mix of byte orderings
+    /// we'll read them in groups and feed them to Uuid such that the string representation
+    /// matches Earth 2150's original GUID string representation
+    fn guid(input: &[u8]) -> IResult<&[u8], Uuid> {
+        let parser = tuple((le_u32, le_u16, le_u16, count(le_u8, 8)));
+        map_res(parser, |(a, b, c, d)| Uuid::from_fields(a, b, c, &d))(input)
+    }
+
+    /// This is a length-delimited block of data where the first 4 bytes
+    /// denote the length of the following data block
+    /// Expects that all required bytes are present in the input
+    fn length_delimited_data(input: &[u8]) -> IResult<&[u8], &[u8]> {
+        let (input, length) = le_u32(input)?;
+        take(length)(input)
+    }
+
+    /// This is a length-delimited block of data where the length includes
+    /// the 4 bytes of the length info itself
+    /// May return Err::Incomplete
+    fn length_delimited_message(input: &[u8]) -> IResult<&[u8], &[u8]> {
+        let (input, length) = streaming::le_u32(input)?;
+        nom::bytes::streaming::take(length - 4)(input)
+    }
+
+    /// Parses a zlib-compressed message and returns the uncompressed data
+    pub fn compressed_message(input: &[u8]) -> IResult<&[u8], Vec<u8>> {
+        map_res(length_delimited_message, |compressed| -> io::Result<Vec<u8>> {
+            let mut decoder = zlib::Decoder::new(compressed)?;
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)?;
+            Ok(decompressed)
+        })(input)
+    }
+
+    fn ident_message(input: &[u8]) -> IResult<&[u8], IdentClientMessage> {
+        let (input, guid) = guid(input)?;
+        let (input, lang) = length_delimited_data(input)?;
+        Ok((input, IdentClientMessage {
+            game_version: guid,
+            language: lang.to_vec(),
+        }))
+    }
+
+    pub fn compressed_ident_message(input: &[u8]) -> IResult<&[u8], IdentClientMessage> {
+        map_res(compressed_message, |decompressed| -> Result<IdentClientMessage, ()> {
+            match ident_message(&decompressed) {
+                Ok((_, ident)) => Ok(ident),
+                _ => Err(()),
+            }
+        })(input)
+    }
+
+    fn login_message(input: &[u8]) -> IResult<&[u8], LoginClientMessage> {
+        let (input, username) = length_delimited_data(input)?;
+        let (input, password) = length_delimited_data(input)?;
+        Ok((input, LoginClientMessage {
+            username: username.to_vec(),
+            password: password.to_vec(),
+        }))
+    }
+
+    pub fn compressed_login_message(input: &[u8]) -> IResult<&[u8], LoginClientMessage> {
+        map_res(compressed_message, |decompressed| -> Result<LoginClientMessage, ()> {
+            match login_message(&decompressed) {
+                Ok((_, login)) => Ok(login),
+                _ => Err(()),
+            }
+        })(input)
+    }
+
+    #[cfg(test)]
+    mod test {
+        use crate::messages::login_client::parsers::guid;
+        use uuid::Uuid;
+        use std::str::FromStr;
+
+        #[test]
+        fn test_guid() {
+            let bytes = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f];
+            assert_eq!(guid(&bytes), Ok((&b""[..], Uuid::parse_str("03020100-0504-0706-0809-0a0b0c0d0e0f").unwrap())))
         }
-        Ok(None)
     }
 }
