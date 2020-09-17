@@ -1,3 +1,11 @@
+use crate::messages::Command;
+use anyhow::{Result, anyhow};
+
+pub fn try_parse_command(input: &[u8]) -> Result<Command> {
+    let (_, command) = parsers::client_command(input).map_err(|_| { anyhow!("Could not parse command from client data")})?;
+    Ok(command)
+}
+
 mod parsers {
     use crate::messages::Command;
     use nom::branch::alt;
@@ -31,7 +39,7 @@ mod parsers {
         separated_list(multispace1, any_param)(input)
     }
 
-    fn client_command(input: &[u8]) -> IResult<&[u8], Command> {
+    pub(super) fn client_command(input: &[u8]) -> IResult<&[u8], Command> {
         let (input, command) = command(input)?;
         let (input, params) = opt(preceded(multispace1, param_list))(input)?;
         let (input, _) = all_consuming(multispace0)(input)?;
