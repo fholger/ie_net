@@ -1,11 +1,5 @@
-#[derive(PartialEq, Debug, Default)]
-pub struct ClientCommand {
-    pub command: Vec<u8>,
-    pub params: Vec<Vec<u8>>,
-}
-
 mod parsers {
-    use crate::messages::client::ClientCommand;
+    use crate::messages::Command;
     use nom::branch::alt;
     use nom::bytes::complete::{is_not, tag, take_while};
     use nom::character::complete::{char, multispace0, multispace1};
@@ -37,13 +31,13 @@ mod parsers {
         separated_list(multispace1, any_param)(input)
     }
 
-    fn client_command(input: &[u8]) -> IResult<&[u8], ClientCommand> {
+    fn client_command(input: &[u8]) -> IResult<&[u8], Command> {
         let (input, command) = command(input)?;
         let (input, params) = opt(preceded(multispace1, param_list))(input)?;
         let (input, _) = all_consuming(multispace0)(input)?;
         Ok((
             input,
-            ClientCommand {
+            Command {
                 command: command.to_vec(),
                 params: match params {
                     None => vec![],
@@ -123,7 +117,7 @@ mod parsers {
                 client_command(b"/noparams"),
                 Ok((
                     &b""[..],
-                    ClientCommand {
+                    Command {
                         command: b"noparams".to_vec(),
                         params: vec![],
                     }
@@ -133,7 +127,7 @@ mod parsers {
                 client_command(b"/withextraspace   "),
                 Ok((
                     &b""[..],
-                    ClientCommand {
+                    Command {
                         command: b"withextraspace".to_vec(),
                         params: vec![],
                     }
@@ -151,7 +145,7 @@ mod parsers {
                 client_command(b"/cmd  param1 param2 \" a longer param\" param4 \"open ended  "),
                 Ok((
                     &b""[..],
-                    ClientCommand {
+                    Command {
                         command: b"cmd".to_vec(),
                         params: vec![
                             b"param1".to_vec(),

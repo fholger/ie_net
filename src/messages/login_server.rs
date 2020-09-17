@@ -1,14 +1,14 @@
-use crate::messages::SendMessage;
+use crate::messages::ServerMessage;
 use anyhow::Result;
 use bytes::BufMut;
 use libflate::zlib;
 use std::io;
 
 #[derive(Debug)]
-pub struct IdentServerParams {}
+pub struct IdentServerMessage {}
 
 #[derive(Debug)]
-pub struct WelcomeServerParams {
+pub struct WelcomeServerMessage {
     pub server_ident: String,
     pub welcome_message: String,
     pub players_total: u32,
@@ -22,15 +22,8 @@ pub struct WelcomeServerParams {
 }
 
 #[derive(Debug)]
-pub struct RejectServerParams {
+pub struct RejectServerMessage {
     pub reason: String,
-}
-
-#[derive(Debug)]
-pub enum LoginServerMessage {
-    Ident(IdentServerParams),
-    Welcome(WelcomeServerParams),
-    Reject(RejectServerParams),
 }
 
 fn compress_bytes(uncompressed_bytes: &[u8]) -> Result<Vec<u8>> {
@@ -48,17 +41,7 @@ fn write_slice(data: &mut Vec<u8>, slice: &[u8]) {
     data.extend_from_slice(slice);
 }
 
-impl SendMessage for LoginServerMessage {
-    fn prepare_message(&self) -> Result<Vec<u8>> {
-        match self {
-            Self::Ident(params) => params.prepare_message(),
-            Self::Welcome(params) => params.prepare_message(),
-            Self::Reject(params) => params.prepare_message(),
-        }
-    }
-}
-
-impl SendMessage for IdentServerParams {
+impl ServerMessage for IdentServerMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         let mut message = Vec::new();
         // message OK status
@@ -74,7 +57,7 @@ impl SendMessage for IdentServerParams {
     }
 }
 
-impl SendMessage for WelcomeServerParams {
+impl ServerMessage for WelcomeServerMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         let mut content = Vec::new();
         write_slice(&mut content, &self.server_ident.as_bytes());
@@ -139,7 +122,7 @@ impl SendMessage for WelcomeServerParams {
     }
 }
 
-impl SendMessage for RejectServerParams {
+impl ServerMessage for RejectServerMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         let mut content = Vec::new();
         // reject code

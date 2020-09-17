@@ -1,8 +1,8 @@
 use crate::broker::{Event, Receiver, Sender};
 use crate::client::LoginStatus::LoggedIn;
 use crate::messages::login_client::{IdentClientMessage, LoginClientMessage};
-use crate::messages::login_server::{IdentServerParams, LoginServerMessage};
-use crate::messages::{ClientMessage, SendMessage, ServerMessage};
+use crate::messages::login_server::IdentServerMessage;
+use crate::messages::{ClientMessage, ServerMessage};
 use crate::server::spawn_and_log_error;
 use anyhow::Result;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ErrorKind};
@@ -16,10 +16,10 @@ use LoginStatus::{Connected, Greeted};
 #[derive(Debug)]
 enum LoginStatus {
     Connected {
-        send: Sender<ServerMessage>,
+        send: Sender<Box<dyn ServerMessage>>,
     },
     Greeted {
-        send: Sender<ServerMessage>,
+        send: Sender<Box<dyn ServerMessage>>,
         game_version: Uuid,
     },
     LoggedIn,
@@ -76,10 +76,7 @@ async fn process_messages(
         login_status = match login_status {
             Connected { mut send } => match IdentClientMessage::try_parse(received)? {
                 Some(ident) => {
-                    send.send(ServerMessage::Login(LoginServerMessage::Ident(
-                        IdentServerParams {},
-                    )))
-                    .await?;
+                    send.send(Box::new(IdentServerMessage {})).await?;
                     Greeted {
                         send,
                         game_version: ident.game_version,
@@ -137,26 +134,19 @@ async fn read_from_client(
 async fn client_write_loop(
     client_id: Uuid,
     mut stream: OwnedWriteHalf,
-    mut messages: Receiver<ServerMessage>,
+    mut messages: Receiver<Box<dyn ServerMessage>>,
     _shutdown_send: mpsc::Sender<()>,
 ) -> Result<()> {
     while let Some(msg) = messages.next().await {
         log::debug!("Sending message to client {}: {:?}", client_id, msg);
-        match msg {
-            ServerMessage::Login(login_msg) => send_message(login_msg, &mut stream).await?,
-            ServerMessage::Disconnect => {
-                stream.shutdown().await?;
-                // TODO: do we need to signal the read task here?
-                break;
-            }
-        }
+        send_message(&*msg, &mut stream).await?;
     }
     log::info!("Writer for client {} is finished", client_id);
     Ok(())
 }
 
 async fn send_message(
-    message: LoginServerMessage,
+    message: &dyn ServerMessage,
     writer: &mut (impl AsyncWrite + Unpin),
 ) -> Result<()> {
     let bytes = message.prepare_message()?;

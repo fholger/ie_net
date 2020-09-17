@@ -1,4 +1,4 @@
-use crate::messages::login_server::{LoginServerMessage, RejectServerParams, WelcomeServerParams};
+use crate::messages::login_server::{RejectServerMessage, WelcomeServerMessage};
 use crate::messages::ServerMessage;
 use anyhow::Result;
 use std::collections::hash_map::Entry;
@@ -19,7 +19,7 @@ pub enum Event {
     NewClient {
         id: Uuid,
         username: String,
-        send: Sender<ServerMessage>,
+        send: Sender<Box<dyn ServerMessage>>,
     },
     DropClient {
         id: Uuid,
@@ -28,7 +28,7 @@ pub enum Event {
 
 struct Client {
     username: String,
-    send: Sender<ServerMessage>,
+    send: Sender<Box<dyn ServerMessage>>,
 }
 
 impl Broker {
@@ -48,32 +48,27 @@ impl Broker {
                 match self.clients.entry(id) {
                     Entry::Occupied(..) => {
                         // FIXME: actually need to check username, not id
-                        send.send(ServerMessage::Login(LoginServerMessage::Reject(
-                            RejectServerParams {
-                                reason: "Already logged in".to_string(),
-                            },
-                        )))
+                        send.send(Box::new(RejectServerMessage {
+                            reason: "Already logged in".to_string(),
+                        }))
                         .await?;
-                        send.send(ServerMessage::Disconnect).await?;
                     }
                     Entry::Vacant(entry) => {
                         log::info!("Client {} has successfully logged in", id);
-                        send.send(ServerMessage::Login(LoginServerMessage::Welcome(
-                            WelcomeServerParams {
-                                server_ident: "IE::Net".to_string(),
-                                welcome_message:
-                                    "Welcome to IE::Net, a community-operated EarthNet server"
-                                        .to_string(),
-                                players_total: 25,
-                                players_online: 12,
-                                channels_total: 1,
-                                games_total: 0,
-                                games_running: 0,
-                                games_available: 0,
-                                game_versions: vec!["tdm2.1".to_string()],
-                                initial_channel: "General".to_string(),
-                            },
-                        )))
+                        send.send(Box::new(WelcomeServerMessage {
+                            server_ident: "IE::Net".to_string(),
+                            welcome_message:
+                                "Welcome to IE::Net, a community-operated EarthNet server"
+                                    .to_string(),
+                            players_total: 25,
+                            players_online: 12,
+                            channels_total: 1,
+                            games_total: 0,
+                            games_running: 0,
+                            games_available: 0,
+                            game_versions: vec!["tdm2.1".to_string()],
+                            initial_channel: "General".to_string(),
+                        }))
                         .await?;
                         entry.insert(Client { username, send });
                     }

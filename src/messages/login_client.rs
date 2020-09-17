@@ -143,7 +143,6 @@ mod parsers {
     #[cfg(test)]
     mod test {
         use crate::messages::login_client::parsers::guid;
-        use std::str::FromStr;
         use uuid::Uuid;
 
         #[test]

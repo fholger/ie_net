@@ -3,16 +3,16 @@ pub mod login_client;
 pub mod login_server;
 
 use anyhow::Result;
-use login_server::LoginServerMessage;
+use std::fmt::Debug;
 
-pub trait SendMessage {
+pub trait ServerMessage: Debug + Send + Sync {
     fn prepare_message(&self) -> Result<Vec<u8>>;
 }
 
-#[derive(Debug)]
-pub enum ServerMessage {
-    Login(LoginServerMessage),
-    Disconnect,
+#[derive(PartialEq, Debug, Default)]
+pub struct Command {
+    pub command: Vec<u8>,
+    pub params: Vec<Vec<u8>>,
 }
 
 pub enum ClientMessage {
