@@ -3,13 +3,13 @@ use crate::client::LoginStatus::LoggedIn;
 use crate::messages::login_client::{IdentClientMessage, LoginClientMessage};
 use crate::messages::login_server::{IdentServerParams, LoginServerMessage};
 use crate::messages::{ClientMessage, SendMessage, ServerMessage};
+use crate::server::spawn_and_log_error;
 use anyhow::Result;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ErrorKind};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::stream::StreamExt;
 use tokio::sync::mpsc;
-use tokio::task;
 use uuid::Uuid;
 use LoginStatus::{Connected, Greeted};
 
@@ -28,8 +28,17 @@ enum LoginStatus {
 pub async fn client_handler(stream: TcpStream, mut broker: Sender<Event>) -> Result<()> {
     let (mut stream_read, stream_write) = stream.into_split();
     let (client_sender, client_receiver) = mpsc::channel(64);
+    let (write_shutdown_send, mut write_shutdown_recv) = mpsc::channel(1);
     let client_id = Uuid::new_v4();
-    let writer_handle = task::spawn(client_write_loop(client_id, stream_write, client_receiver));
+    let writer_handle = spawn_and_log_error(
+        client_write_loop(
+            client_id,
+            stream_write,
+            client_receiver,
+            write_shutdown_send,
+        ),
+        "client_write_loop",
+    );
     let mut login_status = Connected {
         send: client_sender,
     };
@@ -39,15 +48,22 @@ pub async fn client_handler(stream: TcpStream, mut broker: Sender<Event>) -> Res
     log::info!("Starting handler for new client with id {}", client_id);
 
     loop {
-        if !read_from_client(client_id, &mut stream_read, &mut received).await {
-            break;
+        tokio::select! {
+            conn_alive = read_from_client(client_id, &mut stream_read, &mut received) =>
+                if !conn_alive { break },
+            _ = write_shutdown_recv.recv() => {
+                log::info!("Writer for client {} shut down, stopping read handler", client_id);
+                break
+            },
         }
         login_status =
             process_messages(client_id, &mut received, &mut broker, login_status).await?;
     }
     log::info!("Client handler finished for client {}", client_id);
+    broker.send(Event::DropClient { id: client_id }).await?;
     drop(broker);
-    writer_handle.await?
+    writer_handle.await?;
+    Ok(())
 }
 
 async fn process_messages(
@@ -122,6 +138,7 @@ async fn client_write_loop(
     client_id: Uuid,
     mut stream: OwnedWriteHalf,
     mut messages: Receiver<ServerMessage>,
+    _shutdown_send: mpsc::Sender<()>,
 ) -> Result<()> {
     while let Some(msg) = messages.next().await {
         log::debug!("Sending message to client {}: {:?}", client_id, msg);
@@ -134,6 +151,7 @@ async fn client_write_loop(
             }
         }
     }
+    log::info!("Writer for client {} is finished", client_id);
     Ok(())
 }
 

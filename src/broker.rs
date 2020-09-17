@@ -4,11 +4,15 @@ use anyhow::Result;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use tokio::stream::StreamExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 pub type Sender<T> = mpsc::Sender<T>;
 pub type Receiver<T> = mpsc::Receiver<T>;
+
+struct Broker {
+    clients: HashMap<Uuid, Client>,
+}
 
 #[derive(Debug)]
 pub enum Event {
@@ -17,6 +21,9 @@ pub enum Event {
         username: String,
         send: Sender<ServerMessage>,
     },
+    DropClient {
+        id: Uuid,
+    },
 }
 
 struct Client {
@@ -24,11 +31,13 @@ struct Client {
     send: Sender<ServerMessage>,
 }
 
-pub async fn broker_loop(mut events: Receiver<Event>) -> Result<()> {
-    let mut clients: HashMap<Uuid, Client> = HashMap::new();
-    log::info!("Main server loop starting up");
-
-    while let Some(event) = events.next().await {
+impl Broker {
+    fn new() -> Self {
+        Self {
+            clients: HashMap::new(),
+        }
+    }
+    async fn handle_event(&mut self, event: Event) -> Result<()> {
         log::info!("New event");
         match event {
             Event::NewClient {
@@ -36,7 +45,7 @@ pub async fn broker_loop(mut events: Receiver<Event>) -> Result<()> {
                 username,
                 mut send,
             } => {
-                match clients.entry(id) {
+                match self.clients.entry(id) {
                     Entry::Occupied(..) => {
                         // FIXME: actually need to check username, not id
                         send.send(ServerMessage::Login(LoginServerMessage::Reject(
@@ -70,6 +79,29 @@ pub async fn broker_loop(mut events: Receiver<Event>) -> Result<()> {
                     }
                 }
             }
+            Event::DropClient { id } => {
+                log::info!("Client {} disconnected, dropping", id);
+                self.clients.remove(&id);
+            }
+        }
+        Ok(())
+    }
+}
+
+pub async fn broker_loop(
+    mut events: Receiver<Event>,
+    mut shutdown_recv: watch::Receiver<bool>,
+) -> Result<()> {
+    let mut broker = Broker::new();
+    log::info!("Main server loop starting up");
+
+    loop {
+        tokio::select! {
+            Some(event) = events.next() => {
+                broker.handle_event(event).await?;
+            }
+            Some(shutdown) = shutdown_recv.recv() => if shutdown { break },
+            else => break,
         }
     }
 

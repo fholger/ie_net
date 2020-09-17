@@ -23,5 +23,5 @@ async fn main() -> Result<()> {
     flexi_logger::Logger::with_env_or_str("debug").start()?;
     log::info!("IE::Net server starting up...");
 
-    server::run(&options.bind).await
+    server::run(options.bind).await
 }
