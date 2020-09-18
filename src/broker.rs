@@ -7,6 +7,8 @@ use tokio::stream::StreamExt;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 use crate::messages::client_command::ClientCommand;
+use crate::messages::server_messages::SendMessage;
+use std::sync::Arc;
 
 pub type Sender<T> = mpsc::Sender<T>;
 pub type Receiver<T> = mpsc::Receiver<T>;
@@ -20,7 +22,7 @@ pub enum Event {
     NewClient {
         id: Uuid,
         username: String,
-        send: Sender<Box<dyn ServerMessage>>,
+        send: Sender<Arc<dyn ServerMessage>>,
     },
     Message {
         id: Uuid,
@@ -31,9 +33,10 @@ pub enum Event {
     },
 }
 
+#[derive(Clone)]
 struct Client {
     username: String,
-    send: Sender<Box<dyn ServerMessage>>,
+    send: Sender<Arc<dyn ServerMessage>>,
 }
 
 impl Broker {
@@ -43,13 +46,27 @@ impl Broker {
         }
     }
 
-    async fn handle_send(&mut self, id: Uuid, message: Vec<u8>) -> Result<()> {
+    async fn handle_send(&mut self, client: Client, message: Vec<u8>) -> Result<()> {
+        let send_msg = Arc::new(SendMessage {
+            username: client.username,
+            message,
+        });
+        for receiver in self.clients.values_mut() {
+            receiver.send.send(send_msg.clone()).await?;
+        }
         Ok(())
     }
 
     async fn handle_client_command(&mut self, id: Uuid, command: ClientCommand) -> Result<()> {
+        let client = match self.clients.get(&id) {
+            Some(client) => client.clone(),
+            None => {
+                log::info!("Received message for {}, but client does not exist", id);
+                return Ok(())
+            }
+        };
         match command {
-            ClientCommand::Send {message} => self.handle_send(id, message).await,
+            ClientCommand::Send {message} => self.handle_send(client, message).await,
             ClientCommand::Malformed {reason} => Ok(()),
             ClientCommand::Unknown {command} => Ok(()),
         }
@@ -66,14 +83,14 @@ impl Broker {
                 match self.clients.entry(id) {
                     Entry::Occupied(..) => {
                         // FIXME: actually need to check username, not id
-                        send.send(Box::new(RejectServerMessage {
+                        send.send(Arc::new(RejectServerMessage {
                             reason: "Already logged in".to_string(),
                         }))
                         .await?;
                     }
                     Entry::Vacant(entry) => {
                         log::info!("Client {} has successfully logged in", id);
-                        send.send(Box::new(WelcomeServerMessage {
+                        send.send(Arc::new(WelcomeServerMessage {
                             server_ident: "IE::Net".to_string(),
                             welcome_message:
                                 "Welcome to IE::Net, a community-operated EarthNet server"

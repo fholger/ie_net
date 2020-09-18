@@ -1,7 +1,4 @@
 use anyhow::{Result, anyhow};
-use std::fmt::Debug;
-use nom::lib::std::fmt::Formatter;
-use crate::util::bytevec_to_str;
 
 #[derive(PartialEq, Default)]
 pub struct RawCommand {

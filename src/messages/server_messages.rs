@@ -3,8 +3,8 @@ use anyhow::Result;
 
 #[derive(Debug)]
 pub struct SendMessage {
-    username: String,
-    message: Vec<u8>,
+    pub username: String,
+    pub message: Vec<u8>,
 }
 
 fn escape_quotes(input: &[u8]) -> Vec<u8> {
@@ -28,6 +28,7 @@ fn prepare_command(command: &str, params: &[&[u8]]) -> Vec<u8> {
         result.append(&mut escape_quotes(param));
         result.push('"' as u8);
     }
+    result.push(0);
     result
 }
 

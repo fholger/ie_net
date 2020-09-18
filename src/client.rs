@@ -13,14 +13,15 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 use LoginStatus::{Connected, Greeted};
 use crate::messages::client_command::ClientCommand;
+use std::sync::Arc;
 
 #[derive(Debug)]
 enum LoginStatus {
     Connected {
-        send: Sender<Box<dyn ServerMessage>>,
+        send: Sender<Arc<dyn ServerMessage>>,
     },
     Greeted {
-        send: Sender<Box<dyn ServerMessage>>,
+        send: Sender<Arc<dyn ServerMessage>>,
         game_version: Uuid,
     },
     LoggedIn,
@@ -80,7 +81,7 @@ async fn process_messages(
         login_status = match login_status {
             Connected { mut send } => match IdentClientMessage::try_parse(received)? {
                 Some(ident) => {
-                    send.send(Box::new(IdentServerMessage {})).await?;
+                    send.send(Arc::new(IdentServerMessage {})).await?;
                     Greeted {
                         send,
                         game_version: ident.game_version,
@@ -102,7 +103,10 @@ async fn process_messages(
                 None => return Ok(Greeted { send, game_version }),
             },
             LoggedIn => match ClientCommand::try_parse(received)? {
-                Some(msg) => continue,
+                Some(msg) => {
+                    broker.send(Event::Message {id: client_id, command: msg}).await?;
+                    LoggedIn
+                },
                 None => break,
             },
         }
@@ -138,7 +142,7 @@ async fn read_from_client(
 async fn client_write_loop(
     client_id: Uuid,
     mut stream: OwnedWriteHalf,
-    mut messages: Receiver<Box<dyn ServerMessage>>,
+    mut messages: Receiver<Arc<dyn ServerMessage>>,
     _shutdown_send: mpsc::Sender<()>,
 ) -> Result<()> {
     while let Some(msg) = messages.next().await {
