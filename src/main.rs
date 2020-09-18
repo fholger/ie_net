@@ -5,6 +5,7 @@ mod broker;
 mod client;
 mod messages;
 mod server;
+mod util;
 
 use anyhow::Result;
 use structopt::StructOpt;

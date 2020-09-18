@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use tokio::stream::StreamExt;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
+use crate::messages::client_command::ClientCommand;
 
 pub type Sender<T> = mpsc::Sender<T>;
 pub type Receiver<T> = mpsc::Receiver<T>;
@@ -20,6 +21,10 @@ pub enum Event {
         id: Uuid,
         username: String,
         send: Sender<Box<dyn ServerMessage>>,
+    },
+    Message {
+        id: Uuid,
+        command: ClientCommand,
     },
     DropClient {
         id: Uuid,
@@ -37,6 +42,19 @@ impl Broker {
             clients: HashMap::new(),
         }
     }
+
+    async fn handle_send(&mut self, id: Uuid, message: Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+
+    async fn handle_client_command(&mut self, id: Uuid, command: ClientCommand) -> Result<()> {
+        match command {
+            ClientCommand::Send {message} => self.handle_send(id, message).await,
+            ClientCommand::Malformed {reason} => Ok(()),
+            ClientCommand::Unknown {command} => Ok(()),
+        }
+    }
+
     async fn handle_event(&mut self, event: Event) -> Result<()> {
         log::info!("New event");
         match event {
@@ -73,7 +91,8 @@ impl Broker {
                         entry.insert(Client { username, send });
                     }
                 }
-            }
+            },
+            Event::Message {id, command} => self.handle_client_command(id, command).await?,
             Event::DropClient { id } => {
                 log::info!("Client {} disconnected, dropping", id);
                 self.clients.remove(&id);

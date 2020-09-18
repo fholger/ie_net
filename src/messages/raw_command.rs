@@ -1,21 +1,30 @@
-use crate::messages::Command;
 use anyhow::{Result, anyhow};
+use std::fmt::Debug;
+use nom::lib::std::fmt::Formatter;
+use crate::util::bytevec_to_str;
 
-pub fn try_parse_command(input: &[u8]) -> Result<Command> {
+#[derive(PartialEq, Default)]
+pub struct RawCommand {
+    pub command: String,
+    pub params: Vec<Vec<u8>>,
+}
+
+pub fn try_parse_raw_command(input: &[u8]) -> Result<RawCommand> {
     let (_, command) = parsers::client_command(input).map_err(|_| { anyhow!("Could not parse command from client data")})?;
     Ok(command)
 }
 
 mod parsers {
-    use crate::messages::Command;
+    use crate::messages::raw_command::RawCommand;
     use nom::branch::alt;
     use nom::bytes::complete::{is_not, tag, take_while};
     use nom::character::complete::{char, multispace0, multispace1};
     use nom::character::is_alphabetic;
-    use nom::combinator::{all_consuming, opt};
+    use nom::combinator::{opt};
     use nom::multi::separated_list;
-    use nom::sequence::{delimited, preceded};
+    use nom::sequence::{delimited, preceded, tuple};
     use nom::IResult;
+    use crate::util::bytevec_to_str;
 
     fn command(input: &[u8]) -> IResult<&[u8], &[u8]> {
         preceded(char('/'), take_while(is_alphabetic))(input)
@@ -39,14 +48,14 @@ mod parsers {
         separated_list(multispace1, any_param)(input)
     }
 
-    pub(super) fn client_command(input: &[u8]) -> IResult<&[u8], Command> {
+    pub(super) fn client_command(input: &[u8]) -> IResult<&[u8], RawCommand> {
         let (input, command) = command(input)?;
         let (input, params) = opt(preceded(multispace1, param_list))(input)?;
-        let (input, _) = all_consuming(multispace0)(input)?;
+        let (input, _) = tuple((multispace0, char('\0'), end_of_input))(input)?;
         Ok((
             input,
-            Command {
-                command: command.to_vec(),
+            RawCommand {
+                command: bytevec_to_str(command).to_ascii_lowercase(),
                 params: match params {
                     None => vec![],
                     Some(params) => params.iter().map(|x| x.to_vec()).collect(),
@@ -125,7 +134,7 @@ mod parsers {
                 client_command(b"/noparams"),
                 Ok((
                     &b""[..],
-                    Command {
+                    RawCommand {
                         command: b"noparams".to_vec(),
                         params: vec![],
                     }
@@ -135,7 +144,7 @@ mod parsers {
                 client_command(b"/withextraspace   "),
                 Ok((
                     &b""[..],
-                    Command {
+                    RawCommand {
                         command: b"withextraspace".to_vec(),
                         params: vec![],
                     }
@@ -153,7 +162,7 @@ mod parsers {
                 client_command(b"/cmd  param1 param2 \" a longer param\" param4 \"open ended  "),
                 Ok((
                     &b""[..],
-                    Command {
+                    RawCommand {
                         command: b"cmd".to_vec(),
                         params: vec![
                             b"param1".to_vec(),

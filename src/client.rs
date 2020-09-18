@@ -2,7 +2,7 @@ use crate::broker::{Event, Receiver, Sender};
 use crate::client::LoginStatus::LoggedIn;
 use crate::messages::login_client::{IdentClientMessage, LoginClientMessage};
 use crate::messages::login_server::IdentServerMessage;
-use crate::messages::{ClientMessage, ServerMessage};
+use crate::messages::{ServerMessage};
 use crate::server::spawn_and_log_error;
 use anyhow::Result;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ErrorKind};
@@ -12,6 +12,7 @@ use tokio::stream::StreamExt;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 use LoginStatus::{Connected, Greeted};
+use crate::messages::client_command::ClientCommand;
 
 #[derive(Debug)]
 enum LoginStatus {
@@ -30,7 +31,7 @@ pub async fn client_handler(stream: TcpStream, mut broker: Sender<Event>) -> Res
     let (client_sender, client_receiver) = mpsc::channel(64);
     let (write_shutdown_send, mut write_shutdown_recv) = mpsc::channel(1);
     let client_id = Uuid::new_v4();
-    let writer_handle = spawn_and_log_error(
+    spawn_and_log_error(
         client_write_loop(
             client_id,
             stream_write,
@@ -56,13 +57,16 @@ pub async fn client_handler(stream: TcpStream, mut broker: Sender<Event>) -> Res
                 break
             },
         }
-        login_status =
-            process_messages(client_id, &mut received, &mut broker, login_status).await?;
+        login_status = match process_messages(client_id, &mut received, &mut broker, login_status).await {
+            Ok(status) => status,
+            Err(e) => {
+                log::error!("Error parsing message from client {}: {}", client_id, e);
+                break;
+            }
+        };
     }
     log::info!("Client handler finished for client {}", client_id);
     broker.send(Event::DropClient { id: client_id }).await?;
-    drop(broker);
-    writer_handle.await?;
     Ok(())
 }
 
@@ -97,8 +101,8 @@ async fn process_messages(
                 }
                 None => return Ok(Greeted { send, game_version }),
             },
-            LoggedIn => match ClientMessage::try_parse(received)? {
-                Some(_msg) => continue,
+            LoggedIn => match ClientCommand::try_parse(received)? {
+                Some(msg) => continue,
                 None => break,
             },
         }
