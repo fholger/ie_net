@@ -61,7 +61,7 @@ impl ClientCommand {
                 "Received message: {}",
                 bytevec_to_str(message_bytes.as_slice())
             );
-            return match try_parse_raw_command(message_bytes.as_slice()) {
+            return match try_parse_raw_command(&message_bytes.as_slice()[..position]) {
                 Ok(raw) => Ok(Some(match_raw_command(raw))),
                 Err(_) => Ok(Some(ClientCommand::Malformed {
                     reason: "Received message is invalid".to_string(),

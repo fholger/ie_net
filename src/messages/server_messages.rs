@@ -97,7 +97,7 @@ impl ServerMessage for NewChannelMessage {
 impl ServerMessage for DropChannelMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         Ok(prepare_command(
-            "&channel",
+            "/&channel",
             &vec![self.channel_name.as_bytes()],
         ))
     }
@@ -105,7 +105,7 @@ impl ServerMessage for DropChannelMessage {
 
 impl ServerMessage for NewUserMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
-        Ok(prepare_command("$user", &vec![self.username.as_bytes()]))
+        Ok(prepare_command("$user", &vec![self.username.as_bytes(), b"0"]))
     }
 }
 

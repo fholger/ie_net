@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 
-#[derive(PartialEq, Default)]
+#[derive(PartialEq, Debug, Default)]
 pub struct RawCommand {
     pub command: String,
     pub params: Vec<Vec<u8>>,
@@ -49,7 +49,7 @@ mod parsers {
     pub(super) fn client_command(input: &[u8]) -> IResult<&[u8], RawCommand> {
         let (input, command) = command(input)?;
         let (input, params) = opt(preceded(multispace1, param_list))(input)?;
-        let (input, _) = tuple((multispace0, char('\0'), end_of_input))(input)?;
+        let (input, _) = tuple((multispace0, end_of_input))(input)?;
         Ok((
             input,
             RawCommand {
@@ -133,7 +133,7 @@ mod parsers {
                 Ok((
                     &b""[..],
                     RawCommand {
-                        command: b"noparams".to_vec(),
+                        command: "noparams".to_string(),
                         params: vec![],
                     }
                 ))
@@ -143,7 +143,7 @@ mod parsers {
                 Ok((
                     &b""[..],
                     RawCommand {
-                        command: b"withextraspace".to_vec(),
+                        command: "withextraspace".to_string(),
                         params: vec![],
                     }
                 ))
@@ -161,7 +161,7 @@ mod parsers {
                 Ok((
                     &b""[..],
                     RawCommand {
-                        command: b"cmd".to_vec(),
+                        command: "cmd".to_string(),
                         params: vec![
                             b"param1".to_vec(),
                             b"param2".to_vec(),
