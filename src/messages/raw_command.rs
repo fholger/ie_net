@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 #[derive(PartialEq, Default)]
 pub struct RawCommand {
@@ -7,21 +7,22 @@ pub struct RawCommand {
 }
 
 pub fn try_parse_raw_command(input: &[u8]) -> Result<RawCommand> {
-    let (_, command) = parsers::client_command(input).map_err(|_| { anyhow!("Could not parse command from client data")})?;
+    let (_, command) = parsers::client_command(input)
+        .map_err(|_| anyhow!("Could not parse command from client data"))?;
     Ok(command)
 }
 
 mod parsers {
     use crate::messages::raw_command::RawCommand;
+    use crate::util::bytevec_to_str;
     use nom::branch::alt;
     use nom::bytes::complete::{is_not, tag, take_while};
     use nom::character::complete::{char, multispace0, multispace1};
     use nom::character::is_alphabetic;
-    use nom::combinator::{opt};
+    use nom::combinator::opt;
     use nom::multi::separated_list;
     use nom::sequence::{delimited, preceded, tuple};
     use nom::IResult;
-    use crate::util::bytevec_to_str;
 
     fn command(input: &[u8]) -> IResult<&[u8], &[u8]> {
         preceded(char('/'), take_while(is_alphabetic))(input)

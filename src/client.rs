@@ -1,10 +1,12 @@
 use crate::broker::{Event, Receiver, Sender};
 use crate::client::LoginStatus::LoggedIn;
+use crate::messages::client_command::ClientCommand;
 use crate::messages::login_client::{IdentClientMessage, LoginClientMessage};
 use crate::messages::login_server::IdentServerMessage;
-use crate::messages::{ServerMessage};
+use crate::messages::ServerMessage;
 use crate::server::spawn_and_log_error;
 use anyhow::Result;
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ErrorKind};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
@@ -12,8 +14,6 @@ use tokio::stream::StreamExt;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 use LoginStatus::{Connected, Greeted};
-use crate::messages::client_command::ClientCommand;
-use std::sync::Arc;
 
 #[derive(Debug)]
 enum LoginStatus {
@@ -58,13 +58,14 @@ pub async fn client_handler(stream: TcpStream, mut broker: Sender<Event>) -> Res
                 break
             },
         }
-        login_status = match process_messages(client_id, &mut received, &mut broker, login_status).await {
-            Ok(status) => status,
-            Err(e) => {
-                log::error!("Error parsing message from client {}: {}", client_id, e);
-                break;
-            }
-        };
+        login_status =
+            match process_messages(client_id, &mut received, &mut broker, login_status).await {
+                Ok(status) => status,
+                Err(e) => {
+                    log::error!("Error parsing message from client {}: {}", client_id, e);
+                    break;
+                }
+            };
     }
     log::info!("Client handler finished for client {}", client_id);
     broker.send(Event::DropClient { id: client_id }).await?;
@@ -104,9 +105,14 @@ async fn process_messages(
             },
             LoggedIn => match ClientCommand::try_parse(received)? {
                 Some(msg) => {
-                    broker.send(Event::Message {id: client_id, command: msg}).await?;
+                    broker
+                        .send(Event::Message {
+                            id: client_id,
+                            command: msg,
+                        })
+                        .await?;
                     LoggedIn
-                },
+                }
                 None => break,
             },
         }

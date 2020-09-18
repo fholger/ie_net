@@ -1,7 +1,7 @@
-pub mod raw_command;
+pub mod client_command;
 pub mod login_client;
 pub mod login_server;
-pub mod client_command;
+pub mod raw_command;
 pub mod server_messages;
 
 use anyhow::Result;
