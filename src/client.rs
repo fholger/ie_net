@@ -95,6 +95,7 @@ async fn process_messages(
                     broker
                         .send(Event::NewClient {
                             id: client_id,
+                            game_version,
                             send,
                             username: String::from_utf8(login.username)?,
                         })

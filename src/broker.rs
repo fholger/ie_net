@@ -1,9 +1,6 @@
 use crate::messages::client_command::ClientCommand;
 use crate::messages::login_server::{RejectServerMessage, WelcomeServerMessage};
-use crate::messages::server_messages::{
-    DropChannelMessage, ErrorMessage, JoinChannelMessage, NewChannelMessage, NewUserMessage,
-    SendMessage, UserJoinedMessage, UserLeftMessage,
-};
+use crate::messages::server_messages::{DropChannelMessage, ErrorMessage, JoinChannelMessage, NewChannelMessage, NewUserMessage, SendMessage, UserJoinedMessage, UserLeftMessage, NewGameMessage, RawMessage};
 use crate::messages::ServerMessage;
 use anyhow::Result;
 use std::collections::hash_map::Entry;
@@ -12,6 +9,8 @@ use std::sync::Arc;
 use tokio::stream::StreamExt;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
+use permute::permutations_of;
+use crate::messages::raw_command::RawCommand;
 
 pub type Sender<T> = mpsc::Sender<T>;
 pub type Receiver<T> = mpsc::Receiver<T>;
@@ -26,6 +25,7 @@ pub enum Event {
     NewClient {
         id: Uuid,
         username: String,
+        game_version: Uuid,
         send: Sender<Arc<dyn ServerMessage>>,
     },
     Message {
@@ -42,6 +42,7 @@ struct Client {
     id: Uuid,
     username: String,
     channel: String,
+    game_version: Uuid,
     send: Sender<Arc<dyn ServerMessage>>,
 }
 
@@ -93,6 +94,7 @@ impl Broker {
             });
             self.send_all(Arc::new(NewChannelMessage { channel_name }))
                 .await;
+            self.send_all(Arc::new(NewGameMessage { game_name: "game".to_string() })).await;
         }
     }
 
@@ -118,6 +120,73 @@ impl Broker {
             message,
         });
         self.send_to_channel(client.channel.clone(), send_msg).await;
+    }
+
+    async fn experiments(&mut self, mut client: Client) {
+        /*let guid = client.game_version.to_hyphenated().to_string();
+        let params = &["0", "$thegame", "8bef37db-feec-491d-b1c1-cdae706dad89", "tdm2.1", "192.168.1.12", "c7bffb03-148a-441d-8146-c268ca8b3273"];
+        for permutation in permutations_of(params) {
+            let elements: Vec<&&str> = permutation.collect();
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("/$play \"{}\"",
+                    elements[0])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("/$play \"{}\" \"{}\"",
+                                 elements[0], elements[1])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("/$play \"{}\" \"{}\" \"{}\" \"{}\"",
+                                 elements[0], elements[1], elements[2], elements[3])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("/$play \"{}\" \"{}\" \"{}\"",
+                                 elements[0], elements[1], elements[2])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("/$play \"{}\" \"{}\" \"{}\" \"{}\"",
+                                 elements[0], elements[1], elements[2], elements[3])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("/$play \"{}\" \"{}\" \"{}\" \"{}\" \"{}\"",
+                                 elements[0], elements[1], elements[2], elements[3], elements[4])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("/$play \"{}\" \"{}\" \"{}\" \"{}\" \"{}\" \"{}\"",
+                                 elements[0], elements[1], elements[2], elements[3], elements[4], elements[5])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("$play \"{}\"",
+                                 elements[0])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("$play \"{}\" \"{}\"",
+                                 elements[0], elements[1])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("$play \"{}\" \"{}\" \"{}\" \"{}\"",
+                                 elements[0], elements[1], elements[2], elements[3])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("$play \"{}\" \"{}\" \"{}\"",
+                                 elements[0], elements[1], elements[2])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("$play \"{}\" \"{}\" \"{}\" \"{}\"",
+                                 elements[0], elements[1], elements[2], elements[3])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("$play \"{}\" \"{}\" \"{}\" \"{}\" \"{}\"",
+                                 elements[0], elements[1], elements[2], elements[3], elements[4])
+            })).await;
+            send(&mut client, Arc::new(RawMessage {
+                message: format!("$play \"{}\" \"{}\" \"{}\" \"{}\" \"{}\" \"{}\"",
+                                 elements[0], elements[1], elements[2], elements[3], elements[4], elements[5])
+            })).await;
+        }*/
+        send(&mut client, Arc::new(RawMessage {
+            message: format!("/$play \"thegame\" \"4\" \"4\"")
+        })).await;
     }
 
     async fn join_channel(&mut self, mut client: Client, channel: String) {
@@ -185,8 +254,15 @@ impl Broker {
         self.check_remove_channel(prev_channel).await;
     }
 
+    async fn host_game(&mut self, mut client: Client, game_name: String, password: Vec<u8>) {
+        let guid = client.game_version.to_hyphenated().to_string();
+        send(&mut client, Arc::new(RawMessage {
+            message: format!("/plays \"{}\"", guid).to_string(),
+        })).await;
+    }
+
     async fn handle_client_command(&mut self, id: Uuid, command: ClientCommand) {
-        let client = match self.clients.get(&id) {
+        let mut client = match self.clients.get(&id) {
             Some(client) => client.clone(),
             None => {
                 log::info!("Received message for {}, but client does not exist", id);
@@ -196,8 +272,9 @@ impl Broker {
         match command {
             ClientCommand::Send { message } => self.message_channel(client, message).await,
             ClientCommand::Join { channel } => self.join_channel(client, channel).await,
-            ClientCommand::Malformed { reason } => (),
-            ClientCommand::Unknown { command } => (),
+            ClientCommand::HostGame { game_name, password} => self.host_game(client, game_name, password).await,
+            ClientCommand::Malformed { reason } => send(&mut client, Arc::new(RawMessage{message: format!("/error \"{}\"", reason).to_string()})).await,
+            ClientCommand::Unknown { command } => self.experiments(client).await,
         }
     }
 
@@ -207,6 +284,7 @@ impl Broker {
             Event::NewClient {
                 id,
                 username,
+                game_version,
                 mut send,
             } => {
                 match self.clients.entry(id) {
@@ -238,6 +316,7 @@ impl Broker {
                             id,
                             username,
                             channel: "".to_string(),
+                            game_version,
                             send,
                         });
                         self.join_channel(

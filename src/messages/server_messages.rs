@@ -45,6 +45,16 @@ pub struct JoinChannelMessage {
     pub channel_name: String,
 }
 
+#[derive(Debug)]
+pub struct NewGameMessage {
+    pub game_name: String,
+}
+
+#[derive(Debug)]
+pub struct RawMessage {
+    pub message: String,
+}
+
 fn escape_quotes(input: &[u8]) -> Vec<u8> {
     let mut result = Vec::with_capacity(input.len() + 8);
     for b in input {
@@ -88,8 +98,9 @@ impl ServerMessage for ErrorMessage {
 impl ServerMessage for NewChannelMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         Ok(prepare_command(
-            "$channel",
-            &vec![self.channel_name.as_bytes()],
+            "/$channel",
+            // TODO: what is the second parameter? game/lang version?
+            &vec![self.channel_name.as_bytes(), b"0"],
         ))
     }
 }
@@ -136,5 +147,19 @@ impl ServerMessage for JoinChannelMessage {
             "/join",
             &vec![self.channel_name.as_bytes()],
         ))
+    }
+}
+
+impl ServerMessage for NewGameMessage {
+    fn prepare_message(&self) -> Result<Vec<u8>> {
+        Ok(prepare_command("/$play", &vec![&b"00000000-0000-0000-0000-000000000000"[..], self.game_name.as_bytes()]))
+    }
+}
+
+impl ServerMessage for RawMessage {
+    fn prepare_message(&self) -> Result<Vec<u8>> {
+        let mut msg_bytes = self.message.as_bytes().to_vec();
+        msg_bytes.push(0);
+        Ok(msg_bytes)
     }
 }
