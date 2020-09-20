@@ -257,7 +257,7 @@ impl Broker {
     async fn host_game(&mut self, mut client: Client, game_name: String, password: Vec<u8>) {
         let guid = client.game_version.to_hyphenated().to_string();
         send(&mut client, Arc::new(RawMessage {
-            message: format!("/plays \"{}\"", guid).to_string(),
+            message: format!("/plays \"{}\" \"{}\" \"127.0.0.1\"", guid, game_name).to_string(),
         })).await;
     }
 

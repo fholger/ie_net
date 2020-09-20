@@ -16,7 +16,7 @@ mod parsers {
     use crate::messages::raw_command::RawCommand;
     use crate::util::bytevec_to_str;
     use nom::branch::alt;
-    use nom::bytes::complete::{is_not, tag, take_while};
+    use nom::bytes::complete::{is_not, tag, take_while, take_till};
     use nom::character::complete::{char, multispace0, multispace1};
     use nom::character::is_alphabetic;
     use nom::combinator::opt;
@@ -31,7 +31,7 @@ mod parsers {
     named!(end_of_input, eof!());
 
     fn quoted_param(input: &[u8]) -> IResult<&[u8], &[u8]> {
-        delimited(char('"'), is_not("\""), alt((tag("\""), end_of_input)))(input)
+        delimited(char('"'), take_till(|c| c as char == '"'), alt((tag("\""), end_of_input)))(input)
     }
 
     fn unquoted_param(input: &[u8]) -> IResult<&[u8], &[u8]> {
@@ -157,7 +157,7 @@ mod parsers {
         #[test]
         fn test_client_command_with_params() {
             assert_eq!(
-                client_command(b"/cmd  param1 param2 \" a longer param\" param4 \"open ended  "),
+                client_command(b"/cmd  param1 param2 \" a longer param\" param4 \"\" \"open ended  "),
                 Ok((
                     &b""[..],
                     RawCommand {
@@ -167,6 +167,7 @@ mod parsers {
                             b"param2".to_vec(),
                             b" a longer param".to_vec(),
                             b"param4".to_vec(),
+                            b"".to_vec(),
                             b"open ended  ".to_vec()
                         ],
                     }
