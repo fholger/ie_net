@@ -4,11 +4,22 @@ use anyhow::Result;
 
 #[derive(Debug)]
 pub enum ClientCommand {
-    Send { message: Vec<u8> },
-    Join { channel: String },
-    HostGame { game_name: String, password: Vec<u8> },
-    Unknown { command: String },
-    Malformed { reason: String },
+    Send {
+        message: Vec<u8>,
+    },
+    Join {
+        channel: String,
+    },
+    HostGame {
+        game_name: String,
+        password_or_guid: Vec<u8>,
+    },
+    Unknown {
+        command: String,
+    },
+    Malformed {
+        reason: String,
+    },
 }
 
 fn concat_params(params: &[Vec<u8>]) -> Vec<u8> {
@@ -52,7 +63,7 @@ fn hostgame_from_raw(raw: &RawCommand) -> ClientCommand {
     }
     ClientCommand::HostGame {
         game_name: String::from_utf8_lossy(&raw.params[1]).to_string(),
-        password: raw.params[2].to_vec(),
+        password_or_guid: raw.params[2].to_vec(),
     }
 }
 

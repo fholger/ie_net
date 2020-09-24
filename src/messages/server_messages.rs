@@ -1,5 +1,7 @@
 use crate::messages::ServerMessage;
 use anyhow::Result;
+use nom::AsBytes;
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub struct SendMessage {
@@ -46,8 +48,17 @@ pub struct JoinChannelMessage {
 }
 
 #[derive(Debug)]
+pub struct CreateGameMessage {
+    pub version: Uuid,
+    pub game_name: String,
+    pub password: Vec<u8>,
+    pub id: Uuid,
+}
+
+#[derive(Debug)]
 pub struct NewGameMessage {
     pub game_name: String,
+    pub id: Uuid,
 }
 
 #[derive(Debug)]
@@ -116,7 +127,10 @@ impl ServerMessage for DropChannelMessage {
 
 impl ServerMessage for NewUserMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
-        Ok(prepare_command("$user", &vec![self.username.as_bytes(), b"0"]))
+        Ok(prepare_command(
+            "$user",
+            &vec![self.username.as_bytes(), b"0"],
+        ))
     }
 }
 
@@ -150,9 +164,35 @@ impl ServerMessage for JoinChannelMessage {
     }
 }
 
+impl ServerMessage for CreateGameMessage {
+    fn prepare_message(&self) -> Result<Vec<u8>> {
+        Ok(prepare_command(
+            "/plays",
+            &vec![
+                self.version.to_hyphenated().to_string().as_bytes(),
+                self.game_name.as_bytes(),
+                self.password.as_bytes(),
+                b"0xcb", // TODO: what does this even mean?
+                self.id.to_hyphenated().to_string().as_bytes(),
+            ],
+        ))
+    }
+}
+
 impl ServerMessage for NewGameMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
-        Ok(prepare_command("/$play", &vec![&b"00000000-0000-0000-0000-000000000000"[..], self.game_name.as_bytes()]))
+        // TODO: what do all these extra params actually mean?
+        Ok(prepare_command(
+            "/$play",
+            &vec![
+                self.game_name.as_bytes(),
+                b"0",
+                b"0",
+                b"0",
+                self.id.to_hyphenated().to_string().as_bytes(),
+                b"0",
+            ],
+        ))
     }
 }
 

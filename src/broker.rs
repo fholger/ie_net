@@ -1,23 +1,29 @@
+use crate::broker::GameStatus::{Open, Requested};
 use crate::messages::client_command::ClientCommand;
 use crate::messages::login_server::{RejectServerMessage, WelcomeServerMessage};
-use crate::messages::server_messages::{DropChannelMessage, ErrorMessage, JoinChannelMessage, NewChannelMessage, NewUserMessage, SendMessage, UserJoinedMessage, UserLeftMessage, NewGameMessage, RawMessage};
+use crate::messages::raw_command::RawCommand;
+use crate::messages::server_messages::{
+    CreateGameMessage, DropChannelMessage, ErrorMessage, JoinChannelMessage, NewChannelMessage,
+    NewGameMessage, NewUserMessage, RawMessage, SendMessage, UserJoinedMessage, UserLeftMessage,
+};
 use crate::messages::ServerMessage;
 use anyhow::Result;
+use permute::permutations_of;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::stream::StreamExt;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
-use permute::permutations_of;
-use crate::messages::raw_command::RawCommand;
 
 pub type Sender<T> = mpsc::Sender<T>;
 pub type Receiver<T> = mpsc::Receiver<T>;
 
 struct Broker {
     clients: HashMap<Uuid, Client>,
+    users: HashMap<String, Uuid>,
     channels: HashMap<String, Channel>,
+    games: HashMap<String, Game>,
 }
 
 #[derive(Debug)]
@@ -50,15 +56,24 @@ struct Channel {
     name: String,
 }
 
+#[derive(PartialEq)]
+enum GameStatus {
+    Requested,
+    Open,
+    Started,
+}
+
+struct Game {
+    hosted_by: Uuid,
+    id: Uuid,
+    name: String,
+    password: Vec<u8>,
+    status: GameStatus,
+}
+
 const DEFAULT_CHANNEL: &str = "General";
 const ALLOWED_CHANNEL_CHARS: &str =
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
-
-async fn send(client: &mut Client, message: Arc<dyn ServerMessage>) {
-    if let Err(_) = client.send.send(message).await {
-        log::error!("Failed to send message to client {}", client.id);
-    }
-}
 
 fn contains_only_allowed_chars(input: &str, allowed: &str) -> bool {
     input.chars().all(|c| allowed.contains(c))
@@ -68,20 +83,32 @@ impl Broker {
     fn new() -> Self {
         Self {
             clients: HashMap::new(),
+            users: HashMap::new(),
             channels: HashMap::new(),
+            games: HashMap::new(),
         }
     }
 
-    async fn send_all(&mut self, message: Arc<dyn ServerMessage>) {
-        for client in self.clients.values_mut() {
-            send(client, message.clone()).await;
+    async fn send(client: &mut Client, message: Arc<dyn ServerMessage>) {
+        if let Err(_) = client.send.send(message).await {
+            log::error!("Failed to send message to client {}", client.id);
         }
     }
 
-    async fn send_to_channel(&mut self, channel: String, message: Arc<dyn ServerMessage>) {
-        for client in self.clients.values_mut() {
+    async fn send_all(clients: &mut HashMap<Uuid, Client>, message: Arc<dyn ServerMessage>) {
+        for client in clients.values_mut() {
+            Self::send(client, message.clone()).await;
+        }
+    }
+
+    async fn send_to_channel(
+        clients: &mut HashMap<Uuid, Client>,
+        channel: String,
+        message: Arc<dyn ServerMessage>,
+    ) {
+        for client in clients.values_mut() {
             if client.channel == channel {
-                send(client, message.clone()).await;
+                Self::send(client, message.clone()).await;
             }
         }
     }
@@ -92,9 +119,11 @@ impl Broker {
             entry.insert(Channel {
                 name: channel_name.clone(),
             });
-            self.send_all(Arc::new(NewChannelMessage { channel_name }))
-                .await;
-            self.send_all(Arc::new(NewGameMessage { game_name: "game".to_string() })).await;
+            Self::send_all(
+                &mut self.clients,
+                Arc::new(NewChannelMessage { channel_name }),
+            )
+            .await;
         }
     }
 
@@ -110,8 +139,11 @@ impl Broker {
         }
         log::info!("Removing channel {}", channel_name);
         self.channels.remove(&channel_name);
-        self.send_all(Arc::new(DropChannelMessage { channel_name }))
-            .await;
+        Self::send_all(
+            &mut self.clients,
+            Arc::new(DropChannelMessage { channel_name }),
+        )
+        .await;
     }
 
     async fn message_channel(&mut self, client: Client, message: Vec<u8>) {
@@ -119,7 +151,7 @@ impl Broker {
             username: client.username,
             message,
         });
-        self.send_to_channel(client.channel.clone(), send_msg).await;
+        Self::send_to_channel(&mut self.clients, client.channel.clone(), send_msg).await;
     }
 
     async fn experiments(&mut self, mut client: Client) {
@@ -217,14 +249,14 @@ impl Broker {
         send(&mut client, Arc::new(RawMessage {
             message: format!("/$play \"thegame\" \"123x\" \"01234567-1122-3344-5566-0123456789ab\"")
         })).await;*/
-        send(&mut client, Arc::new(RawMessage {
+        Self::send(&mut client, Arc::new(RawMessage {
             message: format!("/$play \"newchannel\" \"0\" \"0\" \"0\" \"12345678-1122-3344-5566-0123456789ab\" \"0\""),
         })).await;
     }
 
     async fn join_channel(&mut self, mut client: Client, channel: String) {
         if !contains_only_allowed_chars(&channel, ALLOWED_CHANNEL_CHARS) {
-            send(
+            Self::send(
                 &mut client,
                 Arc::new(ErrorMessage {
                     error: "Invalid channel name".to_string(),
@@ -239,7 +271,7 @@ impl Broker {
 
         self.add_channel(channel.clone()).await;
         // send join message and list of users in new channel
-        send(
+        Self::send(
             &mut client,
             Arc::new(JoinChannelMessage {
                 channel_name: channel.clone(),
@@ -248,7 +280,7 @@ impl Broker {
         .await;
         for user in self.clients.values_mut() {
             if user.channel == channel {
-                send(
+                Self::send(
                     &mut client,
                     Arc::new(NewUserMessage {
                         username: user.username.clone(),
@@ -258,7 +290,8 @@ impl Broker {
             }
         }
         // inform users in channel about the join
-        self.send_to_channel(
+        Self::send_to_channel(
+            &mut self.clients,
             channel.clone(),
             Arc::new(UserJoinedMessage {
                 username: client.username.clone(),
@@ -271,7 +304,8 @@ impl Broker {
         // inform users from old channel
         self.clients.remove(&client.id);
         let destination = format!("#{}", channel);
-        self.send_to_channel(
+        Self::send_to_channel(
+            &mut self.clients,
             prev_channel.clone(),
             Arc::new(UserLeftMessage {
                 username: client.username.clone(),
@@ -287,11 +321,70 @@ impl Broker {
         self.check_remove_channel(prev_channel).await;
     }
 
-    async fn host_game(&mut self, mut client: Client, game_name: String, password: Vec<u8>) {
-        let guid = client.game_version.to_hyphenated().to_string();
-        send(&mut client, Arc::new(RawMessage {
-            message: format!("/plays \"{}\" \"{}\" \"haha\" \"0xcb\" \"00000000-0000-0000-0000-000000000000\"", guid, game_name).to_string(),
-        })).await;
+    async fn host_game(
+        &mut self,
+        mut client: Client,
+        game_name: String,
+        password_or_guid: Vec<u8>,
+    ) {
+        let games = &mut self.games;
+        match games.entry(game_name.to_ascii_lowercase()) {
+            Entry::Vacant(e) => {
+                log::info!(
+                    "Client {} is requesting to host new game {}",
+                    client.id,
+                    game_name
+                );
+                let message = Arc::new(CreateGameMessage {
+                    game_name: game_name.clone(),
+                    password: password_or_guid.clone(),
+                    version: client.game_version.clone(),
+                    id: Uuid::new_v4(),
+                });
+                Self::send(&mut client, message).await;
+                e.insert(Game {
+                    hosted_by: client.id.clone(),
+                    name: game_name,
+                    password: password_or_guid,
+                    status: Requested,
+                    id: Uuid::from_u128(0),
+                });
+            }
+            Entry::Occupied(mut e) => {
+                let maybe_guid = Uuid::parse_str(&String::from_utf8_lossy(&password_or_guid));
+                if e.get().status != Requested
+                    || e.get().hosted_by != client.id
+                    || maybe_guid.is_err()
+                {
+                    Self::send(
+                        &mut client,
+                        Arc::new(ErrorMessage {
+                            error: "Game already exists.".to_string(),
+                        }),
+                    )
+                    .await;
+                    return;
+                }
+                let guid = maybe_guid.unwrap();
+                log::info!(
+                    "Client {} is hosting game {} with uuid {}",
+                    client.id,
+                    game_name,
+                    guid
+                );
+                e.get_mut().id = guid;
+                e.get_mut().status = Open;
+                Self::send_all(
+                    &mut self.clients,
+                    Arc::new(NewGameMessage {
+                        game_name,
+                        id: e.get().id.clone(),
+                    }),
+                )
+                .await;
+                // TODO: move player and inform their channel
+            }
+        }
     }
 
     async fn handle_client_command(&mut self, id: Uuid, command: ClientCommand) {
@@ -305,8 +398,13 @@ impl Broker {
         match command {
             ClientCommand::Send { message } => self.message_channel(client, message).await,
             ClientCommand::Join { channel } => self.join_channel(client, channel).await,
-            ClientCommand::HostGame { game_name, password} => self.host_game(client, game_name, password).await,
-            ClientCommand::Malformed { reason } => send(&mut client, Arc::new(RawMessage{message: format!("/error \"{}\"", reason).to_string()})).await,
+            ClientCommand::HostGame {
+                game_name,
+                password_or_guid: password,
+            } => self.host_game(client, game_name, password).await,
+            ClientCommand::Malformed { reason } => {
+                Self::send(&mut client, Arc::new(ErrorMessage { error: reason })).await
+            }
             ClientCommand::Unknown { command } => self.experiments(client).await,
         }
     }
