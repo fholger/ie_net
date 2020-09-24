@@ -124,68 +124,101 @@ impl Broker {
 
     async fn experiments(&mut self, mut client: Client) {
         /*let guid = client.game_version.to_hyphenated().to_string();
-        let params = &["0", "$thegame", "8bef37db-feec-491d-b1c1-cdae706dad89", "tdm2.1", "192.168.1.12", "c7bffb03-148a-441d-8146-c268ca8b3273"];
-        for permutation in permutations_of(params) {
-            let elements: Vec<&&str> = permutation.collect();
+        let mut params = vec!["0xcb".to_string(), "thegame".to_string(), "8bef37db-feec-491d-b1c1-cdae706dad89".to_string(), "0a".to_string(), "0".to_string(), "c7bffb03-148a-441d-8146-c268ca8b3273".to_string()];
+        let orders = &[0usize, 1, 2, 3, 4, 5];
+        for permutation in permutations_of(orders) {
+            let indexes: Vec<usize> = permutation.map(|x| *x).collect();
+            let order_marker = format!("{}{}{}{}{}{}", indexes[0], indexes[1], indexes[2], indexes[3], indexes[4], indexes[5]);
+            params[1] = format!("thegame1_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("/$play \"{}\"",
                     elements[0])
             })).await;
+            params[1] = format!("thegame2_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("/$play \"{}\" \"{}\"",
                                  elements[0], elements[1])
             })).await;
+            params[1] = format!("thegame3_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("/$play \"{}\" \"{}\" \"{}\" \"{}\"",
                                  elements[0], elements[1], elements[2], elements[3])
             })).await;
+            params[1] = format!("thegame4_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("/$play \"{}\" \"{}\" \"{}\"",
                                  elements[0], elements[1], elements[2])
             })).await;
+            params[1] = format!("thegame5_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("/$play \"{}\" \"{}\" \"{}\" \"{}\"",
                                  elements[0], elements[1], elements[2], elements[3])
             })).await;
+            params[1] = format!("thegame6_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("/$play \"{}\" \"{}\" \"{}\" \"{}\" \"{}\"",
                                  elements[0], elements[1], elements[2], elements[3], elements[4])
             })).await;
+            params[1] = format!("thegame1a_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("/$play \"{}\" \"{}\" \"{}\" \"{}\" \"{}\" \"{}\"",
                                  elements[0], elements[1], elements[2], elements[3], elements[4], elements[5])
             })).await;
+            params[1] = format!("thegame2a_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("$play \"{}\"",
                                  elements[0])
             })).await;
+            params[1] = format!("thegame3a_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("$play \"{}\" \"{}\"",
                                  elements[0], elements[1])
             })).await;
+            params[1] = format!("thegame4a_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("$play \"{}\" \"{}\" \"{}\" \"{}\"",
                                  elements[0], elements[1], elements[2], elements[3])
             })).await;
+            params[1] = format!("thegame5a_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("$play \"{}\" \"{}\" \"{}\"",
                                  elements[0], elements[1], elements[2])
             })).await;
+            params[1] = format!("thegame6a_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("$play \"{}\" \"{}\" \"{}\" \"{}\"",
                                  elements[0], elements[1], elements[2], elements[3])
             })).await;
+            params[1] = format!("thegame1_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("$play \"{}\" \"{}\" \"{}\" \"{}\" \"{}\"",
                                  elements[0], elements[1], elements[2], elements[3], elements[4])
             })).await;
+            params[1] = format!("thegame1_{}", order_marker);
+            let elements: Vec<&str> = indexes.iter().map(|x| params[*x].as_ref()).collect();
             send(&mut client, Arc::new(RawMessage {
                 message: format!("$play \"{}\" \"{}\" \"{}\" \"{}\" \"{}\" \"{}\"",
                                  elements[0], elements[1], elements[2], elements[3], elements[4], elements[5])
             })).await;
-        }*/
+        }
         send(&mut client, Arc::new(RawMessage {
-            message: format!("/$play \"thegame\" \"4\" \"4\"")
+            message: format!("/$play \"thegame\" \"123x\" \"01234567-1122-3344-5566-0123456789ab\"")
+        })).await;*/
+        send(&mut client, Arc::new(RawMessage {
+            message: format!("/$play \"newchannel\" \"0\" \"0\" \"0\" \"12345678-1122-3344-5566-0123456789ab\" \"0\""),
         })).await;
     }
 
@@ -257,7 +290,7 @@ impl Broker {
     async fn host_game(&mut self, mut client: Client, game_name: String, password: Vec<u8>) {
         let guid = client.game_version.to_hyphenated().to_string();
         send(&mut client, Arc::new(RawMessage {
-            message: format!("/plays \"{}\" \"{}\" \"127.0.0.1\"", guid, game_name).to_string(),
+            message: format!("/plays \"{}\" \"{}\" \"haha\" \"0xcb\" \"00000000-0000-0000-0000-000000000000\"", guid, game_name).to_string(),
         })).await;
     }
 
