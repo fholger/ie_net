@@ -1,6 +1,7 @@
 use crate::messages::ServerMessage;
 use anyhow::Result;
 use nom::AsBytes;
+use std::net::Ipv4Addr;
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -56,9 +57,23 @@ pub struct CreateGameMessage {
 }
 
 #[derive(Debug)]
+pub struct JoinGameMessage {
+    pub version: Uuid,
+    pub game_name: String,
+    pub password: Vec<u8>,
+    pub ip_addr: Ipv4Addr,
+    pub id: Uuid,
+}
+
+#[derive(Debug)]
 pub struct NewGameMessage {
     pub game_name: String,
     pub id: Uuid,
+}
+
+#[derive(Debug)]
+pub struct DropGameMessage {
+    pub game_name: String,
 }
 
 #[derive(Debug)]
@@ -179,6 +194,28 @@ impl ServerMessage for CreateGameMessage {
     }
 }
 
+impl ServerMessage for JoinGameMessage {
+    fn prepare_message(&self) -> Result<Vec<u8>> {
+        let ip_as_u32 = self
+            .ip_addr
+            .octets()
+            .iter()
+            .rev()
+            .fold(0u32, |x, y| (x << 8) + (*y as u32));
+        Ok(prepare_command(
+            "/playc",
+            &vec![
+                self.version.to_hyphenated().to_string().as_bytes(),
+                self.game_name.as_bytes(),
+                self.password.as_bytes(),
+                format!("0x{:08x}", ip_as_u32).as_bytes(),
+                self.id.to_hyphenated().to_string().as_bytes(),
+                self.ip_addr.to_string().as_bytes(),
+            ],
+        ))
+    }
+}
+
 impl ServerMessage for NewGameMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         // TODO: what do all these extra params actually mean?
@@ -193,6 +230,12 @@ impl ServerMessage for NewGameMessage {
                 b"0",
             ],
         ))
+    }
+}
+
+impl ServerMessage for DropGameMessage {
+    fn prepare_message(&self) -> Result<Vec<u8>> {
+        Ok(prepare_command("/&play", &vec![self.game_name.as_bytes()]))
     }
 }
 

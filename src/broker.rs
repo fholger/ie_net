@@ -2,13 +2,15 @@ use crate::broker::GameStatus::{Open, Requested};
 use crate::messages::client_command::ClientCommand;
 use crate::messages::login_server::{RejectServerMessage, WelcomeServerMessage};
 use crate::messages::server_messages::{
-    CreateGameMessage, DropChannelMessage, ErrorMessage, JoinChannelMessage, NewChannelMessage,
-    NewGameMessage, NewUserMessage, SendMessage, UserJoinedMessage, UserLeftMessage,
+    CreateGameMessage, DropChannelMessage, DropGameMessage, ErrorMessage, JoinChannelMessage,
+    JoinGameMessage, NewChannelMessage, NewGameMessage, NewUserMessage, SendMessage,
+    UserJoinedMessage, UserLeftMessage,
 };
 use crate::messages::ServerMessage;
 use anyhow::Result;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::stream::StreamExt;
 use tokio::sync::{mpsc, watch};
@@ -30,6 +32,7 @@ pub enum Event {
         id: Uuid,
         username: String,
         game_version: Uuid,
+        ip_addr: Ipv4Addr,
         send: Sender<Arc<dyn ServerMessage>>,
     },
     Message {
@@ -64,6 +67,7 @@ struct Client {
     username: String,
     location: Location,
     game_version: Uuid,
+    ip_addr: Ipv4Addr,
     send: Sender<Arc<dyn ServerMessage>>,
 }
 
@@ -80,6 +84,7 @@ enum GameStatus {
 
 struct Game {
     hosted_by: Uuid,
+    host_ip: Ipv4Addr,
     id: Uuid,
     name: String,
     password: Vec<u8>,
@@ -166,6 +171,15 @@ impl Broker {
                 )
                 .await;
             }
+            Location::Game { name } => {
+                log::info!("Removing game {}", name);
+                self.games.remove(&name);
+                Self::send_all(
+                    &mut self.clients,
+                    Arc::new(DropGameMessage { game_name: name }),
+                )
+                .await;
+            }
             _ => (),
         }
     }
@@ -202,6 +216,20 @@ impl Broker {
             }),
         )
         .await;
+        let new_location = Location::Channel {
+            name: channel.clone(),
+        };
+        for user in self.clients.values_mut() {
+            if user.location == new_location {
+                Self::send(
+                    &mut client,
+                    Arc::new(NewUserMessage {
+                        username: user.username.clone(),
+                    }),
+                )
+                .await;
+            }
+        }
         // inform users in channel about the join
         Self::send_to_location(
             &mut self.clients,
@@ -261,6 +289,7 @@ impl Broker {
                 Self::send(&mut client, message).await;
                 e.insert(Game {
                     hosted_by: client.id.clone(),
+                    host_ip: client.ip_addr.clone(),
                     name: game_name,
                     password: password_or_guid,
                     status: Requested,
@@ -300,10 +329,10 @@ impl Broker {
                 )
                 .await;
                 let prev_location = client.location;
-                let destination = prev_location.to_string();
                 client.location = Location::Game {
                     name: e.get().name.clone(),
                 };
+                let destination = client.location.to_string();
                 self.clients.remove(&client.id);
                 Self::send_to_location(
                     &mut self.clients,
@@ -316,6 +345,31 @@ impl Broker {
                 .await;
                 self.clients.insert(client.id.clone(), client);
             }
+        }
+    }
+
+    async fn join_game(&mut self, mut client: Client, game_name: String, password: Vec<u8>) {
+        if let Some(game) = self.games.get(&game_name) {
+            let game_version = client.game_version.clone();
+            Self::send(
+                &mut client,
+                Arc::new(JoinGameMessage {
+                    version: game_version,
+                    game_name,
+                    password,
+                    id: game.id.clone(),
+                    ip_addr: game.host_ip.clone(),
+                }),
+            )
+            .await;
+        } else {
+            Self::send(
+                &mut client,
+                Arc::new(ErrorMessage {
+                    error: "Game does not exist".to_string(),
+                }),
+            )
+            .await;
         }
     }
 
@@ -332,8 +386,12 @@ impl Broker {
             ClientCommand::Join { channel } => self.join_channel(client, channel).await,
             ClientCommand::HostGame {
                 game_name,
-                password_or_guid: password,
-            } => self.host_game(client, game_name, password).await,
+                password_or_guid,
+            } => self.host_game(client, game_name, password_or_guid).await,
+            ClientCommand::JoinGame {
+                game_name,
+                password,
+            } => self.join_game(client, game_name, password).await,
             ClientCommand::Malformed { reason } => {
                 Self::send(&mut client, Arc::new(ErrorMessage { error: reason })).await
             }
@@ -356,6 +414,7 @@ impl Broker {
                 id,
                 username,
                 game_version,
+                ip_addr,
                 mut send,
             } => {
                 match self.clients.entry(id) {
@@ -388,6 +447,7 @@ impl Broker {
                             username,
                             location: Location::Nowhere,
                             game_version,
+                            ip_addr,
                             send,
                         });
                         self.join_channel(

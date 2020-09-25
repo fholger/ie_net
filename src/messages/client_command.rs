@@ -14,6 +14,10 @@ pub enum ClientCommand {
         game_name: String,
         password_or_guid: Vec<u8>,
     },
+    JoinGame {
+        game_name: String,
+        password: Vec<u8>,
+    },
     Unknown {
         command: String,
     },
@@ -67,11 +71,24 @@ fn hostgame_from_raw(raw: &RawCommand) -> ClientCommand {
     }
 }
 
+fn joingame_from_raw(raw: &RawCommand) -> ClientCommand {
+    if raw.params.len() < 3 {
+        return ClientCommand::Malformed {
+            reason: "Missing parameters for /playc".to_string(),
+        };
+    }
+    ClientCommand::JoinGame {
+        game_name: String::from_utf8_lossy(&raw.params[1]).to_string(),
+        password: raw.params[2].to_vec(),
+    }
+}
+
 fn match_raw_command(raw: RawCommand) -> ClientCommand {
     match raw.command.as_ref() {
         "send" => send_from_raw(&raw),
         "join" => join_from_raw(&raw),
         "plays" => hostgame_from_raw(&raw),
+        "playc" => joingame_from_raw(&raw),
         _ => ClientCommand::Unknown {
             command: raw.command,
         },

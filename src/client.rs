@@ -6,6 +6,7 @@ use crate::messages::login_server::IdentServerMessage;
 use crate::messages::ServerMessage;
 use crate::server::spawn_and_log_error;
 use anyhow::Result;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ErrorKind};
 use tokio::net::tcp::OwnedWriteHalf;
@@ -28,6 +29,12 @@ enum LoginStatus {
 }
 
 pub async fn client_handler(stream: TcpStream, mut broker: Sender<Event>) -> Result<()> {
+    let ip_addr = match stream.peer_addr()?.ip() {
+        IpAddr::V4(ipv4) => ipv4,
+        IpAddr::V6(_) => Err(anyhow::anyhow!(
+            "IPv6 connections are incompatible with the game"
+        ))?,
+    };
     let (mut stream_read, stream_write) = stream.into_split();
     let (client_sender, client_receiver) = mpsc::channel(64);
     let (write_shutdown_send, mut write_shutdown_recv) = mpsc::channel(1);
@@ -58,14 +65,21 @@ pub async fn client_handler(stream: TcpStream, mut broker: Sender<Event>) -> Res
                 break
             },
         }
-        login_status =
-            match process_messages(client_id, &mut received, &mut broker, login_status).await {
-                Ok(status) => status,
-                Err(e) => {
-                    log::error!("Error parsing message from client {}: {}", client_id, e);
-                    break;
-                }
-            };
+        login_status = match process_messages(
+            client_id,
+            &ip_addr,
+            &mut received,
+            &mut broker,
+            login_status,
+        )
+        .await
+        {
+            Ok(status) => status,
+            Err(e) => {
+                log::error!("Error parsing message from client {}: {}", client_id, e);
+                break;
+            }
+        };
     }
     log::info!("Client handler finished for client {}", client_id);
     broker.send(Event::DropClient { id: client_id }).await?;
@@ -74,6 +88,7 @@ pub async fn client_handler(stream: TcpStream, mut broker: Sender<Event>) -> Res
 
 async fn process_messages(
     client_id: Uuid,
+    ip_addr: &Ipv4Addr,
     received: &mut Vec<u8>,
     broker: &mut Sender<Event>,
     mut login_status: LoginStatus,
@@ -97,6 +112,7 @@ async fn process_messages(
                             id: client_id,
                             game_version,
                             send,
+                            ip_addr: ip_addr.clone(),
                             username: String::from_utf8(login.username)?,
                         })
                         .await?;
