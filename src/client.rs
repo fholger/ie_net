@@ -2,9 +2,10 @@ use crate::broker::{Event, Receiver, Sender};
 use crate::client::LoginStatus::LoggedIn;
 use crate::messages::client_command::ClientCommand;
 use crate::messages::login_client::{IdentClientMessage, LoginClientMessage};
-use crate::messages::login_server::IdentServerMessage;
+use crate::messages::login_server::{IdentServerMessage, RejectServerMessage};
 use crate::messages::ServerMessage;
 use crate::server::spawn_and_log_error;
+use crate::util::{bytevec_to_str, only_allowed_chars_not_empty};
 use anyhow::Result;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -94,48 +95,102 @@ async fn process_messages(
     mut login_status: LoginStatus,
 ) -> Result<LoginStatus> {
     while received.len() > 0 {
+        let initially_available = received.len();
         login_status = match login_status {
-            Connected { mut send } => match IdentClientMessage::try_parse(received)? {
-                Some(ident) => {
-                    send.send(Arc::new(IdentServerMessage {})).await?;
-                    Greeted {
-                        send,
-                        game_version: ident.game_version,
-                    }
-                }
-                None => return Ok(Connected { send }),
-            },
-            Greeted { send, game_version } => match LoginClientMessage::try_parse(received)? {
-                Some(login) => {
-                    broker
-                        .send(Event::NewClient {
-                            id: client_id,
-                            game_version,
-                            send,
-                            ip_addr: ip_addr.clone(),
-                            username: String::from_utf8(login.username)?,
-                        })
-                        .await?;
-                    LoggedIn
-                }
-                None => return Ok(Greeted { send, game_version }),
-            },
-            LoggedIn => match ClientCommand::try_parse(received)? {
-                Some(msg) => {
-                    broker
-                        .send(Event::Message {
-                            id: client_id,
-                            command: msg,
-                        })
-                        .await?;
-                    LoggedIn
-                }
-                None => break,
-            },
+            Connected { send } => process_ident(received, send).await?,
+            Greeted { send, game_version } => {
+                process_login(client_id, ip_addr, received, broker, send, game_version).await?
+            }
+            LoggedIn => process_commands(client_id, received, broker).await?,
+        };
+        if received.len() == initially_available {
+            // no data was consumed, so need to wait for more data
+            break;
         }
     }
 
     Ok(login_status)
+}
+
+async fn process_commands(
+    client_id: Uuid,
+    received: &mut Vec<u8>,
+    broker: &mut Sender<Event>,
+) -> Result<LoginStatus> {
+    match ClientCommand::try_parse(received)? {
+        Some(msg) => {
+            broker
+                .send(Event::Command {
+                    id: client_id,
+                    command: msg,
+                })
+                .await?;
+            Ok(LoggedIn)
+        }
+        None => Ok(LoggedIn),
+    }
+}
+
+async fn process_login(
+    client_id: Uuid,
+    ip_addr: &Ipv4Addr,
+    received: &mut Vec<u8>,
+    broker: &mut Sender<Event>,
+    mut send: Sender<Arc<dyn ServerMessage>>,
+    game_version: Uuid,
+) -> Result<LoginStatus> {
+    const ALLOWED_USERNAME_CHARS: &str =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.|()[]{}";
+    match LoginClientMessage::try_parse(received)? {
+        Some(login) => {
+            let username = bytevec_to_str(&login.username);
+            if only_allowed_chars_not_empty(&username, ALLOWED_USERNAME_CHARS) {
+                broker
+                    .send(Event::NewClient {
+                        id: client_id,
+                        game_version,
+                        send,
+                        ip_addr: ip_addr.clone(),
+                        username,
+                    })
+                    .await?;
+                Ok(LoggedIn)
+            } else {
+                send.send(Arc::new(RejectServerMessage {
+                    reason: "translateInvalidCharactersInName".to_string(),
+                }))
+                .await?;
+                Ok(Greeted { send, game_version })
+            }
+        }
+        None => Ok(Greeted { send, game_version }),
+    }
+}
+
+async fn process_ident(
+    received: &mut Vec<u8>,
+    mut send: Sender<Arc<dyn ServerMessage>>,
+) -> Result<LoginStatus> {
+    let allowed_game_version: Uuid =
+        Uuid::parse_str("534ba248-a87c-4ce9-8bee-bc376aae6134").unwrap();
+    match IdentClientMessage::try_parse(received)? {
+        Some(ident) => {
+            if ident.game_version == allowed_game_version || true {
+                send.send(Arc::new(IdentServerMessage {})).await?;
+                Ok(Greeted {
+                    send,
+                    game_version: ident.game_version,
+                })
+            } else {
+                send.send(Arc::new(RejectServerMessage {
+                    reason: "Wrong game version. Please install version 2.2".to_string(),
+                }))
+                .await?;
+                Ok(Connected { send })
+            }
+        }
+        None => Ok(Connected { send }),
+    }
 }
 
 async fn read_from_client(

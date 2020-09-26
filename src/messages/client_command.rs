@@ -7,6 +7,10 @@ pub enum ClientCommand {
     Send {
         message: Vec<u8>,
     },
+    PrivateMessage {
+        target: String,
+        message: Vec<u8>,
+    },
     Join {
         channel: String,
     },
@@ -18,6 +22,7 @@ pub enum ClientCommand {
         game_name: String,
         password: Vec<u8>,
     },
+    NoOp,
     Unknown {
         command: String,
     },
@@ -45,6 +50,18 @@ fn send_from_raw(raw: &RawCommand) -> ClientCommand {
     }
     ClientCommand::Send {
         message: concat_params(&raw.params[..]),
+    }
+}
+
+fn msg_from_raw(raw: &RawCommand) -> ClientCommand {
+    if raw.params.len() < 2 {
+        return ClientCommand::Malformed {
+            reason: "Missing parameters for /msg".to_string(),
+        };
+    }
+    ClientCommand::PrivateMessage {
+        target: bytevec_to_str(&raw.params[0]),
+        message: concat_params(&raw.params[1..]),
     }
 }
 
@@ -86,9 +103,13 @@ fn joingame_from_raw(raw: &RawCommand) -> ClientCommand {
 fn match_raw_command(raw: RawCommand) -> ClientCommand {
     match raw.command.as_ref() {
         "send" => send_from_raw(&raw),
+        "msg" => msg_from_raw(&raw),
         "join" => join_from_raw(&raw),
         "plays" => hostgame_from_raw(&raw),
         "playc" => joingame_from_raw(&raw),
+        "playv" => ClientCommand::NoOp,
+        "playd" => ClientCommand::NoOp,
+        "nop" => ClientCommand::NoOp,
         _ => ClientCommand::Unknown {
             command: raw.command,
         },

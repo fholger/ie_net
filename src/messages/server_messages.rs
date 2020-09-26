@@ -11,6 +11,19 @@ pub struct SendMessage {
 }
 
 #[derive(Debug)]
+pub struct PrivateMessage {
+    pub from: String,
+    pub location: String,
+    pub message: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub struct SentPrivateMessage {
+    pub to: String,
+    pub message: Vec<u8>,
+}
+
+#[derive(Debug)]
 pub struct ErrorMessage {
     pub error: String,
 }
@@ -111,6 +124,29 @@ impl ServerMessage for SendMessage {
         Ok(prepare_command(
             "/send",
             &vec![self.username.as_bytes(), &self.message],
+        ))
+    }
+}
+
+impl ServerMessage for PrivateMessage {
+    fn prepare_message(&self) -> Result<Vec<u8>> {
+        Ok(prepare_command(
+            "/msg",
+            &vec![
+                self.location.as_bytes(),
+                self.from.as_bytes(),
+                self.location.as_bytes(),
+                &self.message,
+            ],
+        ))
+    }
+}
+
+impl ServerMessage for SentPrivateMessage {
+    fn prepare_message(&self) -> Result<Vec<u8>> {
+        Ok(prepare_command(
+            "/msgc",
+            &vec![self.to.as_bytes(), &self.message],
         ))
     }
 }
