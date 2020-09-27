@@ -1,4 +1,4 @@
-use crate::broker::{Event, Receiver, Sender};
+use crate::broker::{Event, MessageSender, MessageReceiver, EventSender};
 use crate::client::LoginStatus::LoggedIn;
 use crate::messages::client_command::ClientCommand;
 use crate::messages::login_client::{IdentClientMessage, LoginClientMessage};
@@ -20,16 +20,16 @@ use LoginStatus::{Connected, Greeted};
 #[derive(Debug)]
 enum LoginStatus {
     Connected {
-        send: Sender<Arc<dyn ServerMessage>>,
+        send: MessageSender,
     },
     Greeted {
-        send: Sender<Arc<dyn ServerMessage>>,
+        send: MessageSender,
         game_version: Uuid,
     },
     LoggedIn,
 }
 
-pub async fn client_handler(stream: TcpStream, mut broker: Sender<Event>) -> Result<()> {
+pub async fn client_handler(stream: TcpStream, mut broker: EventSender) -> Result<()> {
     let ip_addr = match stream.peer_addr()?.ip() {
         IpAddr::V4(ipv4) => ipv4,
         IpAddr::V6(_) => Err(anyhow::anyhow!(
@@ -91,7 +91,7 @@ async fn process_messages(
     client_id: Uuid,
     ip_addr: &Ipv4Addr,
     received: &mut Vec<u8>,
-    broker: &mut Sender<Event>,
+    broker: &mut EventSender,
     mut login_status: LoginStatus,
 ) -> Result<LoginStatus> {
     while received.len() > 0 {
@@ -115,7 +115,7 @@ async fn process_messages(
 async fn process_commands(
     client_id: Uuid,
     received: &mut Vec<u8>,
-    broker: &mut Sender<Event>,
+    broker: &mut EventSender,
 ) -> Result<LoginStatus> {
     match ClientCommand::try_parse(received)? {
         Some(msg) => {
@@ -135,8 +135,8 @@ async fn process_login(
     client_id: Uuid,
     ip_addr: &Ipv4Addr,
     received: &mut Vec<u8>,
-    broker: &mut Sender<Event>,
-    mut send: Sender<Arc<dyn ServerMessage>>,
+    broker: &mut EventSender,
+    mut send: MessageSender,
     game_version: Uuid,
 ) -> Result<LoginStatus> {
     const ALLOWED_USERNAME_CHARS: &str =
@@ -146,7 +146,7 @@ async fn process_login(
             let username = bytevec_to_str(&login.username);
             if only_allowed_chars_not_empty(&username, ALLOWED_USERNAME_CHARS) {
                 broker
-                    .send(Event::NewClient {
+                    .send(Event::NewUser {
                         id: client_id,
                         game_version,
                         send,
@@ -169,7 +169,7 @@ async fn process_login(
 
 async fn process_ident(
     received: &mut Vec<u8>,
-    mut send: Sender<Arc<dyn ServerMessage>>,
+    mut send: MessageSender,
 ) -> Result<LoginStatus> {
     let allowed_game_version: Uuid =
         Uuid::parse_str("534ba248-a87c-4ce9-8bee-bc376aae6134").unwrap();
@@ -220,7 +220,7 @@ async fn read_from_client(
 async fn client_write_loop(
     client_id: Uuid,
     mut stream: OwnedWriteHalf,
-    mut messages: Receiver<Arc<dyn ServerMessage>>,
+    mut messages: MessageReceiver,
     _shutdown_send: mpsc::Sender<()>,
 ) -> Result<()> {
     while let Some(msg) = messages.next().await {

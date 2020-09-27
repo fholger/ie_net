@@ -13,6 +13,7 @@ pub struct SendMessage {
 #[derive(Debug)]
 pub struct PrivateMessage {
     pub from: String,
+    pub to: String,
     pub location: String,
     pub message: Vec<u8>,
 }
@@ -133,9 +134,10 @@ impl ServerMessage for PrivateMessage {
         Ok(prepare_command(
             "/msg",
             &vec![
-                self.location.as_bytes(),
+                //self.location.as_bytes(),
+                &b"0"[..],
                 self.from.as_bytes(),
-                self.location.as_bytes(),
+                self.to.as_bytes(),
                 &self.message,
             ],
         ))

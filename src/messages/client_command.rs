@@ -109,6 +109,7 @@ fn match_raw_command(raw: RawCommand) -> ClientCommand {
         "playc" => joingame_from_raw(&raw),
         "playv" => ClientCommand::NoOp,
         "playd" => ClientCommand::NoOp,
+        "playi" => ClientCommand::NoOp,
         "nop" => ClientCommand::NoOp,
         _ => ClientCommand::Unknown {
             command: raw.command,
