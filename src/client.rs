@@ -175,7 +175,7 @@ async fn process_ident(
         Uuid::parse_str("534ba248-a87c-4ce9-8bee-bc376aae6134").unwrap();
     match IdentClientMessage::try_parse(received)? {
         Some(ident) => {
-            if ident.game_version == allowed_game_version || true {
+            if ident.game_version == allowed_game_version {
                 send.send(Arc::new(IdentServerMessage {})).await?;
                 Ok(Greeted {
                     send,
