@@ -1,7 +1,9 @@
+use crate::broker::ArcServerMessage;
 use crate::messages::ServerMessage;
 use anyhow::Result;
 use nom::AsBytes;
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -118,6 +120,14 @@ fn prepare_command(command: &str, params: &[&[u8]]) -> Vec<u8> {
     }
     result.push(0);
     result
+}
+
+impl ErrorMessage {
+    pub fn new(error: &str) -> ArcServerMessage {
+        Arc::new(ErrorMessage {
+            error: error.to_string(),
+        })
+    }
 }
 
 impl ServerMessage for SendMessage {

@@ -1,28 +1,28 @@
 mod channel;
+mod game;
 mod user;
 
 use crate::broker::channel::Channels;
+use crate::broker::game::Games;
 use crate::broker::user::Users;
-use crate::broker::GameStatus::{Open, Requested};
 use crate::messages::client_command::ClientCommand;
-use crate::messages::login_server::{RejectServerMessage, WelcomeServerMessage};
+use crate::messages::login_server::WelcomeServerMessage;
 use crate::messages::server_messages::{
-    CreateGameMessage, DropGameMessage, ErrorMessage, JoinChannelMessage, JoinGameMessage,
-    NewGameMessage, PrivateMessage, SendMessage, SentPrivateMessage,
+    ErrorMessage, JoinChannelMessage, JoinGameMessage, PrivateMessage, SendMessage,
+    SentPrivateMessage,
 };
 use crate::messages::ServerMessage;
 use crate::util::{bytevec_to_str, only_allowed_chars_not_empty};
 use anyhow::Result;
 use channel::DEFAULT_CHANNEL;
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use game::GameStatus::Requested;
+use game::GameStatus::Started;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::stream::StreamExt;
 use tokio::sync::{mpsc, watch};
 use user::{Location, User};
 use uuid::Uuid;
-use GameStatus::Started;
 
 pub type ArcServerMessage = Arc<dyn ServerMessage>;
 pub type MessageSender = mpsc::Sender<ArcServerMessage>;
@@ -33,7 +33,7 @@ pub type EventReceiver = mpsc::Receiver<Event>;
 struct Broker {
     users: Users,
     channels: Channels,
-    games: HashMap<String, Game>,
+    games: Games,
 }
 
 #[derive(Debug)]
@@ -54,22 +54,6 @@ pub enum Event {
     },
 }
 
-#[derive(PartialEq)]
-enum GameStatus {
-    Requested,
-    Open,
-    Started,
-}
-
-struct Game {
-    hosted_by: Uuid,
-    host_ip: Ipv4Addr,
-    id: Uuid,
-    name: String,
-    password: Vec<u8>,
-    status: GameStatus,
-}
-
 const ALLOWED_NAME_CHARS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
 
 impl Broker {
@@ -77,7 +61,7 @@ impl Broker {
         Self {
             users: Users::new(),
             channels: Channels::new(),
-            games: HashMap::new(),
+            games: Games::new(),
         }
     }
 
@@ -197,92 +181,40 @@ impl Broker {
 
     async fn host_game(&mut self, mut user: User, game_name: String, password_or_guid: Vec<u8>) {
         if !only_allowed_chars_not_empty(&game_name, ALLOWED_NAME_CHARS) {
-            user.send(Arc::new(ErrorMessage {
-                error: "Invalid game name".to_string(),
-            }))
-            .await;
+            user.send(ErrorMessage::new("Invalid game name")).await;
             return;
         }
 
-        match self.games.entry(game_name.to_ascii_lowercase()) {
-            Entry::Vacant(e) => {
-                log::info!(
-                    "Client {} is requesting to host new game {}",
-                    user.id,
-                    game_name
-                );
-                user.send(Arc::new(CreateGameMessage {
-                    game_name: game_name.clone(),
-                    password: password_or_guid.clone(),
-                    version: user.game_version.clone(),
-                    id: Uuid::new_v4(),
-                }))
-                .await;
-                e.insert(Game {
-                    hosted_by: user.id.clone(),
-                    host_ip: user.ip_addr.clone(),
-                    name: game_name,
-                    password: password_or_guid,
-                    status: Requested,
-                    id: Uuid::from_u128(0),
-                });
+        if let Some(game) = self.games.get(&game_name) {
+            let maybe_guid = Uuid::parse_str(&String::from_utf8_lossy(&password_or_guid));
+            if game.status == Started || game.hosted_by != user.id || maybe_guid.is_err() {
+                user.send(ErrorMessage::new("Game already exists.")).await;
+                return;
             }
-            Entry::Occupied(mut e) => {
-                let maybe_guid = Uuid::parse_str(&String::from_utf8_lossy(&password_or_guid));
-                if e.get().status == Started || e.get().hosted_by != user.id || maybe_guid.is_err()
-                {
-                    user.send(Arc::new(ErrorMessage {
-                        error: "Game already exists.".to_string(),
-                    }))
+            let status = game.status;
+            if status == Requested {
+                user.location = game.to_location();
+                self.games
+                    .open_game(&mut self.users, &game_name, maybe_guid.unwrap())
                     .await;
-                    return;
-                }
-                let guid = maybe_guid.unwrap();
-                match e.get().status {
-                    Requested => {
-                        log::info!(
-                            "Client {} is hosting game {} with uuid {}",
-                            user.id,
-                            game_name,
-                            guid
-                        );
-                        e.get_mut().id = guid;
-                        e.get_mut().status = Open;
-                        self.users
-                            .send_to_all(Arc::new(NewGameMessage {
-                                game_name,
-                                id: e.get().id.clone(),
-                            }))
-                            .await;
-                        user.location = Location::Game {
-                            name: e.get().name.clone(),
-                        };
-                        self.users.update(user).await;
-                    }
-                    Open => {
-                        log::info!("Game {} has been started", e.get().name);
-                        e.get_mut().status = Started;
-                        self.users
-                            .send_to_all(Arc::new(DropGameMessage {
-                                game_name: e.get().name.clone(),
-                            }))
-                            .await;
-                    }
-                    Started => (),
-                }
+                self.users.update(user).await;
+            } else {
+                self.games.start_game(&mut self.users, &game_name).await;
             }
+        } else {
+            self.games
+                .create_game(&mut user, &game_name, &password_or_guid)
+                .await;
         }
     }
 
     async fn join_game(&mut self, mut user: User, game_name: String, password: Vec<u8>) {
-        if let Some(game) = self.games.get(&game_name.to_ascii_lowercase()) {
+        if let Some(game) = self.games.get(&game_name) {
             let game_version = user.game_version.clone();
             if let Ok(id) = Uuid::parse_str(&bytevec_to_str(&password)) {
                 if id == game.id {
                     log::info!("Client {} has joined game {}", user.id, game.name);
-                    user.location = Location::Game {
-                        name: game.name.clone(),
-                    };
+                    user.location = game.to_location();
                     self.users.update(user).await;
                 }
             } else {
@@ -345,31 +277,6 @@ impl Broker {
         }
     }
 
-    async fn handle_event(&mut self, event: Event) -> Result<()> {
-        match event {
-            Event::NewUser {
-                id,
-                username,
-                game_version,
-                ip_addr,
-                send,
-            } => {
-                self.handle_new_user(id, username, game_version, ip_addr, send)
-                    .await
-            }
-            Event::Command { id, command } => self.handle_client_command(id, command).await,
-            Event::DropClient { id } => {
-                log::info!("Client {} disconnected, dropping", id);
-                self.users.remove(id).await;
-            }
-        }
-
-        self.channels
-            .check_remove_empty_channels(&mut self.users)
-            .await;
-        Ok(())
-    }
-
     async fn handle_new_user(
         &mut self,
         id: Uuid,
@@ -392,10 +299,6 @@ impl Broker {
                 "A client with username {} is already logged in, dropping client",
                 user.username
             );
-            user.send(Arc::new(RejectServerMessage {
-                reason: "Already logged in".to_string(),
-            }))
-            .await;
             return;
         }
 
@@ -418,18 +321,8 @@ impl Broker {
         }))
         .await;
 
-        // send list of channels
         self.channels.announce_all(&mut user).await;
-        // send list of open games
-        for game in self.games.values() {
-            if game.status == Open {
-                user.send(Arc::new(NewGameMessage {
-                    id: game.id,
-                    game_name: game.name.clone(),
-                }))
-                .await;
-            }
-        }
+        self.games.announce_open(&mut user).await;
 
         self.users.insert(user).await;
         self.join_channel(
@@ -437,6 +330,32 @@ impl Broker {
             DEFAULT_CHANNEL.to_string(),
         )
         .await;
+    }
+
+    async fn handle_event(&mut self, event: Event) -> Result<()> {
+        match event {
+            Event::NewUser {
+                id,
+                username,
+                game_version,
+                ip_addr,
+                send,
+            } => {
+                self.handle_new_user(id, username, game_version, ip_addr, send)
+                    .await
+            }
+            Event::Command { id, command } => self.handle_client_command(id, command).await,
+            Event::DropClient { id } => {
+                log::info!("Client {} disconnected, dropping", id);
+                self.users.remove(id).await;
+            }
+        }
+
+        self.channels
+            .check_remove_empty_channels(&mut self.users)
+            .await;
+        self.games.check_remove_empty_games(&mut self.users).await;
+        Ok(())
     }
 }
 
