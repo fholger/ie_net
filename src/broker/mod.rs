@@ -3,18 +3,18 @@ mod game;
 mod user;
 
 use crate::broker::channel::Channels;
-use crate::broker::game::Games;
+use crate::broker::game::{Games, ALLOWED_GAME_NAME_CHARS};
 use crate::broker::user::Users;
 use crate::messages::client_command::ClientCommand;
 use crate::messages::login_server::WelcomeServerMessage;
 use crate::messages::server_messages::{
     ErrorMessage, JoinChannelMessage, JoinGameMessage, PrivateMessage, SendMessage,
-    SentPrivateMessage,
+    SentPrivateMessage, SyncStatsMessage,
 };
 use crate::messages::ServerMessage;
 use crate::util::{bytevec_to_str, only_allowed_chars_not_empty};
 use anyhow::Result;
-use channel::DEFAULT_CHANNEL;
+use channel::{ALLOWED_CHANNEL_NAME_CHARS, DEFAULT_CHANNEL};
 use game::GameStatus::Requested;
 use game::GameStatus::Started;
 use std::net::Ipv4Addr;
@@ -29,12 +29,6 @@ pub type MessageSender = mpsc::Sender<ArcServerMessage>;
 pub type MessageReceiver = mpsc::Receiver<ArcServerMessage>;
 pub type EventSender = mpsc::Sender<Event>;
 pub type EventReceiver = mpsc::Receiver<Event>;
-
-struct Broker {
-    users: Users,
-    channels: Channels,
-    games: Games,
-}
 
 #[derive(Debug)]
 pub enum Event {
@@ -54,7 +48,21 @@ pub enum Event {
     },
 }
 
-const ALLOWED_NAME_CHARS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
+#[derive(PartialEq)]
+struct Stats {
+    users_total: u32,
+    users_online: u32,
+    channels_total: u32,
+    games_total: u32,
+    games_open: u32,
+}
+
+struct Broker {
+    users: Users,
+    channels: Channels,
+    games: Games,
+    stats: Stats,
+}
 
 impl Broker {
     fn new() -> Self {
@@ -62,6 +70,13 @@ impl Broker {
             users: Users::new(),
             channels: Channels::new(),
             games: Games::new(),
+            stats: Stats {
+                users_total: 0,
+                users_online: 0,
+                channels_total: 0,
+                games_total: 0,
+                games_open: 0,
+            },
         }
     }
 
@@ -75,80 +90,88 @@ impl Broker {
             .await;
     }
 
-    async fn private_message(&mut self, mut user: User, target: String, message: Vec<u8>) {
+    async fn private_message_channel(&mut self, mut user: User, channel: &str, message: Vec<u8>) {
+        if let Some(channel) = self.channels.get(channel) {
+            user.send(Arc::new(SentPrivateMessage {
+                to: format!("#{}", channel.name),
+                message: message.clone(),
+            }))
+            .await;
+            self.users
+                .send_to_location(
+                    channel.to_location(),
+                    Arc::new(PrivateMessage {
+                        from: user.username.clone(),
+                        to: format!("#{}", channel.name),
+                        location: user.location.to_string(),
+                        message,
+                    }),
+                )
+                .await;
+        } else {
+            user.send(ErrorMessage::new("Channel does not exist")).await;
+        }
+    }
+
+    async fn private_message_game(&mut self, mut user: User, game: &str, message: Vec<u8>) {
+        if let Some(game) = self.games.get(game) {
+            user.send(Arc::new(SentPrivateMessage {
+                to: format!("${}", game.name),
+                message: message.clone(),
+            }))
+            .await;
+            self.users
+                .send_to_location(
+                    Location::Game {
+                        name: game.name.clone(),
+                    },
+                    Arc::new(PrivateMessage {
+                        from: user.username.clone(),
+                        to: format!("${}", game.name),
+                        location: user.location.to_string(),
+                        message,
+                    }),
+                )
+                .await;
+        } else {
+            user.send(ErrorMessage::new("Game does not exist")).await;
+        }
+    }
+
+    async fn private_message_user(&mut self, mut user: User, recipient: &str, message: Vec<u8>) {
+        if let Some(recipient) = self.users.by_username_mut(recipient) {
+            user.send(Arc::new(SentPrivateMessage {
+                to: recipient.username.clone(),
+                message: message.clone(),
+            }))
+            .await;
+            recipient
+                .send(Arc::new(PrivateMessage {
+                    from: user.username.clone(),
+                    to: recipient.username.clone(),
+                    location: user.location.to_string(),
+                    message,
+                }))
+                .await;
+            return;
+        } else {
+            user.send(ErrorMessage::new("User does not exist")).await;
+        }
+    }
+
+    async fn private_message(&mut self, user: User, target: String, message: Vec<u8>) {
         match &target[0..1] {
             "#" => {
-                if let Some(channel) = self.channels.get(&target[1..]) {
-                    user.send(Arc::new(SentPrivateMessage {
-                        to: format!("#{}", channel.name),
-                        message: message.clone(),
-                    }))
-                    .await;
-                    self.users
-                        .send_to_location(
-                            channel.to_location(),
-                            Arc::new(PrivateMessage {
-                                from: user.username.clone(),
-                                to: format!("#{}", channel.name),
-                                location: user.location.to_string(),
-                                message,
-                            }),
-                        )
-                        .await;
-                    return;
-                }
+                self.private_message_channel(user, &target[1..], message)
+                    .await
             }
-            "$" => {
-                if let Some(game) = self.games.get(&target[1..].to_ascii_lowercase()) {
-                    user.send(Arc::new(SentPrivateMessage {
-                        to: format!("${}", game.name),
-                        message: message.clone(),
-                    }))
-                    .await;
-                    self.users
-                        .send_to_location(
-                            Location::Game {
-                                name: game.name.clone(),
-                            },
-                            Arc::new(PrivateMessage {
-                                from: user.username.clone(),
-                                to: format!("${}", game.name),
-                                location: user.location.to_string(),
-                                message,
-                            }),
-                        )
-                        .await;
-                    return;
-                }
-            }
-            _ => {
-                if let Some(recipient) = self.users.by_username_mut(&target) {
-                    user.send(Arc::new(SentPrivateMessage {
-                        to: recipient.username.clone(),
-                        message: message.clone(),
-                    }))
-                    .await;
-                    recipient
-                        .send(Arc::new(PrivateMessage {
-                            from: user.username.clone(),
-                            to: recipient.username.clone(),
-                            location: user.location.to_string(),
-                            message,
-                        }))
-                        .await;
-                    return;
-                }
-            }
+            "$" => self.private_message_game(user, &target[1..], message).await,
+            _ => self.private_message_user(user, &target, message).await,
         }
-
-        user.send(Arc::new(ErrorMessage {
-            error: format!("Unknown target: {}", target).to_string(),
-        }))
-        .await;
     }
 
     async fn join_channel(&mut self, mut user: User, channel_name: String) {
-        if !only_allowed_chars_not_empty(&channel_name, ALLOWED_NAME_CHARS) {
+        if !only_allowed_chars_not_empty(&channel_name, ALLOWED_CHANNEL_NAME_CHARS) {
             user.send(Arc::new(ErrorMessage {
                 error: "Invalid channel name".to_string(),
             }))
@@ -180,7 +203,7 @@ impl Broker {
     }
 
     async fn host_game(&mut self, mut user: User, game_name: String, password_or_guid: Vec<u8>) {
-        if !only_allowed_chars_not_empty(&game_name, ALLOWED_NAME_CHARS) {
+        if !only_allowed_chars_not_empty(&game_name, ALLOWED_GAME_NAME_CHARS) {
             user.send(ErrorMessage::new("Invalid game name")).await;
             return;
         }
@@ -272,7 +295,15 @@ impl Broker {
                 user.send(Arc::new(ErrorMessage {
                     error: format!("Unknown command: {}", command),
                 }))
-                .await
+                .await;
+                user.send(Arc::new(SyncStatsMessage {
+                    channels_total: 0,
+                    games_total: 0,
+                    games_open: 0,
+                    users_online: 0,
+                    users_total: 0,
+                }))
+                .await;
             }
         }
     }
@@ -332,6 +363,28 @@ impl Broker {
         .await;
     }
 
+    async fn update_stats(&mut self) {
+        let stats = Stats {
+            users_total: self.users.count(),
+            users_online: self.users.count(),
+            channels_total: self.channels.count(),
+            games_total: self.games.count(),
+            games_open: self.games.count_open(),
+        };
+        if stats != self.stats {
+            self.stats = stats;
+            self.users
+                .send_to_all(Arc::new(SyncStatsMessage {
+                    users_total: self.stats.users_total,
+                    users_online: self.stats.users_online,
+                    channels_total: self.stats.channels_total,
+                    games_total: self.stats.games_total,
+                    games_open: self.stats.games_open,
+                }))
+                .await;
+        }
+    }
+
     async fn handle_event(&mut self, event: Event) -> Result<()> {
         match event {
             Event::NewUser {
@@ -355,6 +408,7 @@ impl Broker {
             .check_remove_empty_channels(&mut self.users)
             .await;
         self.games.check_remove_empty_games(&mut self.users).await;
+        self.update_stats().await;
         Ok(())
     }
 }

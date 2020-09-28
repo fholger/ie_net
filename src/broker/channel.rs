@@ -10,6 +10,8 @@ pub struct Channel {
 }
 
 pub const DEFAULT_CHANNEL: &str = "General";
+pub const ALLOWED_CHANNEL_NAME_CHARS: &str =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
 
 impl Channel {
     pub fn to_location(&self) -> Location {
@@ -40,6 +42,10 @@ impl Channels {
         Channels {
             by_name: HashMap::new(),
         }
+    }
+
+    pub fn count(&self) -> u32 {
+        self.by_name.len() as u32
     }
 
     pub async fn get_or_create(&mut self, users: &mut Users, name: &str) -> &Channel {

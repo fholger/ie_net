@@ -9,6 +9,9 @@ use std::time::Instant;
 use tokio::time::Duration;
 use uuid::Uuid;
 
+pub const ALLOWED_GAME_NAME_CHARS: &str =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_+.| ";
+
 #[derive(PartialEq, Clone, Copy)]
 pub enum GameStatus {
     Requested,
@@ -57,6 +60,14 @@ impl Games {
         Self {
             by_name: HashMap::new(),
         }
+    }
+
+    pub fn count(&self) -> u32 {
+        self.by_name.len() as u32
+    }
+
+    pub fn count_open(&self) -> u32 {
+        self.by_name.values().filter(|g| g.status == Open).count() as u32
     }
 
     pub fn get(&self, name: &str) -> Option<&Game> {

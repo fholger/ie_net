@@ -93,6 +93,15 @@ pub struct DropGameMessage {
 }
 
 #[derive(Debug)]
+pub struct SyncStatsMessage {
+    pub users_online: u32,
+    pub users_total: u32,
+    pub games_open: u32,
+    pub games_total: u32,
+    pub channels_total: u32,
+}
+
+#[derive(Debug)]
 pub struct RawMessage {
     pub message: String,
 }
@@ -144,8 +153,7 @@ impl ServerMessage for PrivateMessage {
         Ok(prepare_command(
             "/msg",
             &vec![
-                //self.location.as_bytes(),
-                &b"0"[..],
+                self.location.as_bytes(),
                 self.from.as_bytes(),
                 self.to.as_bytes(),
                 &self.message,
@@ -284,6 +292,23 @@ impl ServerMessage for NewGameMessage {
 impl ServerMessage for DropGameMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         Ok(prepare_command("/&play", &vec![self.game_name.as_bytes()]))
+    }
+}
+
+impl ServerMessage for SyncStatsMessage {
+    fn prepare_message(&self) -> Result<Vec<u8>> {
+        Ok(prepare_command(
+            "/syncstats",
+            &vec![
+                format!("{}", self.users_total).as_bytes(),
+                format!("{}", self.users_online).as_bytes(),
+                format!("{}", self.channels_total).as_bytes(),
+                format!("{}", self.games_total).as_bytes(),
+                b"0",
+                b"",
+                format!("{}", self.games_open).as_bytes(),
+            ],
+        ))
     }
 }
 

@@ -62,6 +62,10 @@ impl Users {
         }
     }
 
+    pub fn count(&self) -> u32 {
+        self.by_id.len() as u32
+    }
+
     pub fn users_in_location(&self, location: &Location) -> Vec<&User> {
         self.by_id
             .values()
