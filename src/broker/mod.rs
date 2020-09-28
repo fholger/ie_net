@@ -296,14 +296,6 @@ impl Broker {
                     error: format!("Unknown command: {}", command),
                 }))
                 .await;
-                user.send(Arc::new(SyncStatsMessage {
-                    channels_total: 0,
-                    games_total: 0,
-                    games_open: 0,
-                    users_online: 0,
-                    users_total: 0,
-                }))
-                .await;
             }
         }
     }
