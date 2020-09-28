@@ -1,4 +1,4 @@
-use crate::broker::{Event, MessageSender, MessageReceiver, EventSender};
+use crate::broker::{Event, EventSender, MessageReceiver, MessageSender};
 use crate::client::LoginStatus::LoggedIn;
 use crate::messages::client_command::ClientCommand;
 use crate::messages::login_client::{IdentClientMessage, LoginClientMessage};
@@ -167,10 +167,7 @@ async fn process_login(
     }
 }
 
-async fn process_ident(
-    received: &mut Vec<u8>,
-    mut send: MessageSender,
-) -> Result<LoginStatus> {
+async fn process_ident(received: &mut Vec<u8>, mut send: MessageSender) -> Result<LoginStatus> {
     let allowed_game_version: Uuid =
         Uuid::parse_str("534ba248-a87c-4ce9-8bee-bc376aae6134").unwrap();
     match IdentClientMessage::try_parse(received)? {

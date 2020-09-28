@@ -1,26 +1,28 @@
+mod channel;
 mod user;
 
+use crate::broker::channel::Channels;
+use crate::broker::user::Users;
 use crate::broker::GameStatus::{Open, Requested};
 use crate::messages::client_command::ClientCommand;
 use crate::messages::login_server::{RejectServerMessage, WelcomeServerMessage};
 use crate::messages::server_messages::{
-    CreateGameMessage, DropChannelMessage, DropGameMessage, ErrorMessage, JoinChannelMessage,
-    JoinGameMessage, NewChannelMessage, NewGameMessage, NewUserMessage, PrivateMessage,
-    SendMessage, SentPrivateMessage,
+    CreateGameMessage, DropGameMessage, ErrorMessage, JoinChannelMessage, JoinGameMessage,
+    NewGameMessage, PrivateMessage, SendMessage, SentPrivateMessage,
 };
 use crate::messages::ServerMessage;
 use crate::util::{bytevec_to_str, only_allowed_chars_not_empty};
 use anyhow::Result;
+use channel::DEFAULT_CHANNEL;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::stream::StreamExt;
 use tokio::sync::{mpsc, watch};
+use user::{Location, User};
 use uuid::Uuid;
 use GameStatus::Started;
-use user::{User, Location};
-use crate::broker::user::Users;
 
 pub type ArcServerMessage = Arc<dyn ServerMessage>;
 pub type MessageSender = mpsc::Sender<ArcServerMessage>;
@@ -30,7 +32,7 @@ pub type EventReceiver = mpsc::Receiver<Event>;
 
 struct Broker {
     users: Users,
-    channels: HashMap<String, Channel>,
+    channels: Channels,
     games: HashMap<String, Game>,
 }
 
@@ -52,10 +54,6 @@ pub enum Event {
     },
 }
 
-struct Channel {
-    name: String,
-}
-
 #[derive(PartialEq)]
 enum GameStatus {
     Requested,
@@ -72,56 +70,14 @@ struct Game {
     status: GameStatus,
 }
 
-const DEFAULT_CHANNEL: &str = "General";
 const ALLOWED_NAME_CHARS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
 
 impl Broker {
     fn new() -> Self {
         Self {
             users: Users::new(),
-            channels: HashMap::new(),
+            channels: Channels::new(),
             games: HashMap::new(),
-        }
-    }
-
-    async fn add_channel(&mut self, channel_name: String) {
-        if let Entry::Vacant(entry) = self.channels.entry(channel_name.to_ascii_lowercase()) {
-            log::info!("Adding new channel {}", channel_name);
-            entry.insert(Channel {
-                name: channel_name.clone(),
-            });
-            self.users.send_to_all(Arc::new(NewChannelMessage { channel_name })).await;
-        }
-    }
-
-    async fn check_remove_location(&mut self, location: Location) {
-        let in_location = self.users.count_in_location(&location);
-        if in_location != 0 {
-            log::debug!(
-                "{} users remain in location {}",
-                in_location,
-                location.to_string()
-            );
-            return;
-        }
-        match location {
-            Location::Channel { name } => {
-                log::info!("Removing channel {}", name);
-                self.channels.remove(&name);
-                self.users.send_to_all(
-                    Arc::new(DropChannelMessage { channel_name: name }),
-                )
-                .await;
-            }
-            Location::Game { name } => {
-                log::info!("Removing game {}", name);
-                self.games.remove(&name);
-                self.users.send_to_all(
-                    Arc::new(DropGameMessage { game_name: name }),
-                )
-                .await;
-            }
-            _ => (),
         }
     }
 
@@ -130,145 +86,120 @@ impl Broker {
             username: user.username,
             message,
         });
-        self.users.send_to_location(user.location.clone(), send_msg).await;
+        self.users
+            .send_to_location(user.location.clone(), send_msg)
+            .await;
     }
 
     async fn private_message(&mut self, mut user: User, target: String, message: Vec<u8>) {
         match &target[0..1] {
             "#" => {
-                if let Some(channel) = self.channels.get(&target[1..].to_ascii_lowercase()) {
-                    user.send(
-                        Arc::new(SentPrivateMessage {
-                            to: format!("#{}", channel.name),
-                            message: message.clone(),
-                        }),
-                    ).await;
-                    self.users.send_to_location(
-                        Location::Channel {
-                            name: channel.name.clone(),
-                        },
-                        Arc::new(PrivateMessage {
-                            from: user.username.clone(),
-                            to: format!("#{}", channel.name),
-                            location: user.location.to_string(),
-                            message,
-                        }),
-                    ).await;
+                if let Some(channel) = self.channels.get(&target[1..]) {
+                    user.send(Arc::new(SentPrivateMessage {
+                        to: format!("#{}", channel.name),
+                        message: message.clone(),
+                    }))
+                    .await;
+                    self.users
+                        .send_to_location(
+                            channel.to_location(),
+                            Arc::new(PrivateMessage {
+                                from: user.username.clone(),
+                                to: format!("#{}", channel.name),
+                                location: user.location.to_string(),
+                                message,
+                            }),
+                        )
+                        .await;
                     return;
                 }
             }
             "$" => {
                 if let Some(game) = self.games.get(&target[1..].to_ascii_lowercase()) {
-                    user.send(
-                        Arc::new(SentPrivateMessage {
-                            to: format!("${}", game.name),
-                            message: message.clone(),
-                        }),
-                    ).await;
-                    self.users.send_to_location(
-                        Location::Game {
-                            name: game.name.clone(),
-                        },
-                        Arc::new(PrivateMessage {
-                            from: user.username.clone(),
-                            to: format!("${}", game.name),
-                            location: user.location.to_string(),
-                            message,
-                        }),
-                    ).await;
+                    user.send(Arc::new(SentPrivateMessage {
+                        to: format!("${}", game.name),
+                        message: message.clone(),
+                    }))
+                    .await;
+                    self.users
+                        .send_to_location(
+                            Location::Game {
+                                name: game.name.clone(),
+                            },
+                            Arc::new(PrivateMessage {
+                                from: user.username.clone(),
+                                to: format!("${}", game.name),
+                                location: user.location.to_string(),
+                                message,
+                            }),
+                        )
+                        .await;
                     return;
                 }
             }
             _ => {
                 if let Some(recipient) = self.users.by_username_mut(&target) {
-                    user.send(
-                        Arc::new(SentPrivateMessage {
-                            to: recipient.username.clone(),
-                            message: message.clone(),
-                        }),
-                    ).await;
-                    recipient.send(
-                        Arc::new(PrivateMessage {
+                    user.send(Arc::new(SentPrivateMessage {
+                        to: recipient.username.clone(),
+                        message: message.clone(),
+                    }))
+                    .await;
+                    recipient
+                        .send(Arc::new(PrivateMessage {
                             from: user.username.clone(),
                             to: recipient.username.clone(),
                             location: user.location.to_string(),
                             message,
-                        }),
-                    ).await;
+                        }))
+                        .await;
                     return;
                 }
             }
         }
 
-        user.send(
-            Arc::new(ErrorMessage {
-                error: format!("Unknown target: {}", target).to_string(),
-            }),
-        )
+        user.send(Arc::new(ErrorMessage {
+            error: format!("Unknown target: {}", target).to_string(),
+        }))
         .await;
     }
 
-    async fn join_channel(&mut self, mut user: User, channel: String) {
-        if !only_allowed_chars_not_empty(&channel, ALLOWED_NAME_CHARS) {
-            user.send(
-                Arc::new(ErrorMessage {
-                    error: "Invalid channel name".to_string(),
-                }),
-            )
+    async fn join_channel(&mut self, mut user: User, channel_name: String) {
+        if !only_allowed_chars_not_empty(&channel_name, ALLOWED_NAME_CHARS) {
+            user.send(Arc::new(ErrorMessage {
+                error: "Invalid channel name".to_string(),
+            }))
             .await;
             return;
         }
 
-        let prev_location = user.location.clone();
-
-        self.add_channel(channel.clone()).await;
-        // send join message and list of users in new channel
-        let channel_name = self
+        let channel = self
             .channels
-            .get(&channel.to_ascii_lowercase())
-            .unwrap()
-            .name
-            .clone();
-        drop(channel);
-        user.send(
-            Arc::new(JoinChannelMessage {
-                channel_name: channel_name.clone(),
-            }),
-        )
-        .await;
-        let new_location = Location::Channel {
-            name: channel_name.clone(),
-        };
-        for username in self.users.users_in_location(&new_location) {
-            user.send(
-                Arc::new(NewUserMessage {
-                    username,
-                }),
-            )
+            .get_or_create(&mut self.users, &channel_name)
             .await;
+        if channel.to_location() == user.location {
+            log::debug!("User is already in requested channel, nothing to do");
+            return;
+        }
+
+        // send join message and list of users in new channel
+        user.send(Arc::new(JoinChannelMessage {
+            channel_name: channel.name.clone(),
+        }))
+        .await;
+        for u in self.users.users_in_location(&channel.to_location()) {
+            user.send(u.to_new_user_message()).await;
         }
 
         // update channel information for client
-        user.location = Location::Channel {
-            name: channel_name.clone(),
-        };
+        user.location = channel.to_location();
         self.users.update(user).await;
-
-        self.check_remove_location(prev_location).await;
     }
 
-    async fn host_game(
-        &mut self,
-        mut user: User,
-        game_name: String,
-        password_or_guid: Vec<u8>,
-    ) {
+    async fn host_game(&mut self, mut user: User, game_name: String, password_or_guid: Vec<u8>) {
         if !only_allowed_chars_not_empty(&game_name, ALLOWED_NAME_CHARS) {
-            user.send(
-                Arc::new(ErrorMessage {
-                    error: "Invalid game name".to_string(),
-                }),
-            )
+            user.send(Arc::new(ErrorMessage {
+                error: "Invalid game name".to_string(),
+            }))
             .await;
             return;
         }
@@ -285,7 +216,8 @@ impl Broker {
                     password: password_or_guid.clone(),
                     version: user.game_version.clone(),
                     id: Uuid::new_v4(),
-                })).await;
+                }))
+                .await;
                 e.insert(Game {
                     hosted_by: user.id.clone(),
                     host_ip: user.ip_addr.clone(),
@@ -297,15 +229,11 @@ impl Broker {
             }
             Entry::Occupied(mut e) => {
                 let maybe_guid = Uuid::parse_str(&String::from_utf8_lossy(&password_or_guid));
-                if e.get().status == Started
-                    || e.get().hosted_by != user.id
-                    || maybe_guid.is_err()
+                if e.get().status == Started || e.get().hosted_by != user.id || maybe_guid.is_err()
                 {
-                    user.send(
-                        Arc::new(ErrorMessage {
-                            error: "Game already exists.".to_string(),
-                        }),
-                    )
+                    user.send(Arc::new(ErrorMessage {
+                        error: "Game already exists.".to_string(),
+                    }))
                     .await;
                     return;
                 }
@@ -320,13 +248,12 @@ impl Broker {
                         );
                         e.get_mut().id = guid;
                         e.get_mut().status = Open;
-                        self.users.send_to_all(
-                            Arc::new(NewGameMessage {
+                        self.users
+                            .send_to_all(Arc::new(NewGameMessage {
                                 game_name,
                                 id: e.get().id.clone(),
-                            }),
-                        )
-                        .await;
+                            }))
+                            .await;
                         user.location = Location::Game {
                             name: e.get().name.clone(),
                         };
@@ -335,12 +262,11 @@ impl Broker {
                     Open => {
                         log::info!("Game {} has been started", e.get().name);
                         e.get_mut().status = Started;
-                        self.users.send_to_all(
-                            Arc::new(DropGameMessage {
+                        self.users
+                            .send_to_all(Arc::new(DropGameMessage {
                                 game_name: e.get().name.clone(),
-                            }),
-                        )
-                        .await;
+                            }))
+                            .await;
                     }
                     Started => (),
                 }
@@ -361,31 +287,25 @@ impl Broker {
                 }
             } else {
                 if password == game.password {
-                    user.send(
-                        Arc::new(JoinGameMessage {
-                            version: game_version,
-                            game_name: game.name.clone(),
-                            password,
-                            id: game.id.clone(),
-                            ip_addr: game.host_ip.clone(),
-                        }),
-                    )
+                    user.send(Arc::new(JoinGameMessage {
+                        version: game_version,
+                        game_name: game.name.clone(),
+                        password,
+                        id: game.id.clone(),
+                        ip_addr: game.host_ip.clone(),
+                    }))
                     .await;
                 } else {
-                    user.send(
-                        Arc::new(ErrorMessage {
-                            error: "Invalid password".to_string(),
-                        }),
-                    )
+                    user.send(Arc::new(ErrorMessage {
+                        error: "Invalid password".to_string(),
+                    }))
                     .await;
                 }
             }
         } else {
-            user.send(
-                Arc::new(ErrorMessage {
-                    error: "Game does not exist".to_string(),
-                }),
-            )
+            user.send(Arc::new(ErrorMessage {
+                error: "Game does not exist".to_string(),
+            }))
             .await;
         }
     }
@@ -417,11 +337,9 @@ impl Broker {
                 user.send(Arc::new(ErrorMessage { error: reason })).await
             }
             ClientCommand::Unknown { command } => {
-                user.send(
-                    Arc::new(ErrorMessage {
-                        error: format!("Unknown command: {}", command),
-                    }),
-                )
+                user.send(Arc::new(ErrorMessage {
+                    error: format!("Unknown command: {}", command),
+                }))
                 .await
             }
         }
@@ -436,7 +354,8 @@ impl Broker {
                 ip_addr,
                 send,
             } => {
-                self.handle_new_user(id, username, game_version, ip_addr, send).await
+                self.handle_new_user(id, username, game_version, ip_addr, send)
+                    .await
             }
             Event::Command { id, command } => self.handle_client_command(id, command).await,
             Event::DropClient { id } => {
@@ -444,6 +363,10 @@ impl Broker {
                 self.users.remove(id).await;
             }
         }
+
+        self.channels
+            .check_remove_empty_channels(&mut self.users)
+            .await;
         Ok(())
     }
 
@@ -469,49 +392,41 @@ impl Broker {
                 "A client with username {} is already logged in, dropping client",
                 user.username
             );
-            user.send(
-                Arc::new(RejectServerMessage {
-                    reason: "Already logged in".to_string(),
-                }),
-            ).await;
+            user.send(Arc::new(RejectServerMessage {
+                reason: "Already logged in".to_string(),
+            }))
+            .await;
             return;
         }
 
-        log::info!("User {} has successfully logged in as {}", user.id, user.username);
-        user.send(
-            Arc::new(WelcomeServerMessage {
-                server_ident: "IE::Net".to_string(),
-                welcome_message: "Welcome to IE::Net, a community-operated EarthNet server"
-                    .to_string(),
-                players_total: 0,
-                players_online: 0,
-                channels_total: 0,
-                games_total: 0,
-                games_running: 0,
-                games_available: 0,
-                game_versions: vec!["tmp2.2".to_string()],
-                initial_channel: DEFAULT_CHANNEL.to_string(),
-            }),
-        ).await;
+        log::info!(
+            "User {} has successfully logged in as {}",
+            user.id,
+            user.username
+        );
+        user.send(Arc::new(WelcomeServerMessage {
+            server_ident: "IE::Net".to_string(),
+            welcome_message: "Welcome to IE::Net, a community-operated EarthNet server".to_string(),
+            players_total: 0,
+            players_online: 0,
+            channels_total: 0,
+            games_total: 0,
+            games_running: 0,
+            games_available: 0,
+            game_versions: vec!["tmp2.2".to_string()],
+            initial_channel: DEFAULT_CHANNEL.to_string(),
+        }))
+        .await;
 
         // send list of channels
-        for channel in self.channels.values() {
-            user.send(
-                Arc::new(NewChannelMessage {
-                    channel_name: channel.name.clone(),
-                }),
-            )
-            .await;
-        }
+        self.channels.announce_all(&mut user).await;
         // send list of open games
         for game in self.games.values() {
             if game.status == Open {
-                user.send(
-                    Arc::new(NewGameMessage {
-                        id: game.id,
-                        game_name: game.name.clone(),
-                    }),
-                )
+                user.send(Arc::new(NewGameMessage {
+                    id: game.id,
+                    game_name: game.name.clone(),
+                }))
                 .await;
             }
         }

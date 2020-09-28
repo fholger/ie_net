@@ -1,11 +1,11 @@
-use uuid::Uuid;
+use crate::broker::{ArcServerMessage, MessageSender};
+use crate::messages::server_messages::{NewUserMessage, UserJoinedMessage, UserLeftMessage};
+use nom::lib::std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use crate::broker::{MessageSender, ArcServerMessage};
-use nom::lib::std::collections::HashMap;
-use crate::messages::server_messages::{UserJoinedMessage, UserLeftMessage};
+use uuid::Uuid;
 
-#[derive(PartialEq, Clone)]
+#[derive(Clone, PartialEq, Hash, Eq)]
 pub enum Location {
     Channel { name: String },
     Game { name: String },
@@ -41,6 +41,12 @@ impl User {
             log::warn!("Failed to send message to user {}", self.id);
         }
     }
+
+    pub fn to_new_user_message(&self) -> ArcServerMessage {
+        Arc::new(NewUserMessage {
+            username: self.username.clone(),
+        })
+    }
 }
 
 pub struct Users {
@@ -56,12 +62,15 @@ impl Users {
         }
     }
 
-    pub fn count_in_location(&self, location: &Location) -> usize {
-        self.by_id.values().filter(|c| c.location == *location).count()
+    pub fn users_in_location(&self, location: &Location) -> Vec<&User> {
+        self.by_id
+            .values()
+            .filter(|u| u.location == *location)
+            .collect()
     }
 
-    pub fn users_in_location(&self, location: &Location) -> Vec<String> {
-        self.by_id.values().filter(|u| u.location == *location).map(|u| u.username.clone()).collect()
+    pub fn occupied_locations(&self) -> HashSet<Location> {
+        self.by_id.values().map(|u| u.location.clone()).collect()
     }
 
     pub fn by_username(&self, username: &str) -> Option<&User> {
@@ -90,11 +99,7 @@ impl Users {
         }
     }
 
-    pub async fn send_to_location(
-        &mut self,
-        location: Location,
-        message: ArcServerMessage,
-    ) {
+    pub async fn send_to_location(&mut self, location: Location, message: ArcServerMessage) {
         for user in self.by_id.values_mut() {
             if user.location == location {
                 user.send(message.clone()).await;
@@ -104,13 +109,18 @@ impl Users {
 
     pub async fn insert(&mut self, user: User) {
         // inform existing users at location of new user
-        self.send_to_location(user.location.clone(), Arc::new(UserJoinedMessage {
-            username: user.username.clone(),
-            origin: None,
-            version_idx: 0,
-        })).await;
+        self.send_to_location(
+            user.location.clone(),
+            Arc::new(UserJoinedMessage {
+                username: user.username.clone(),
+                origin: None,
+                version_idx: 0,
+            }),
+        )
+        .await;
 
-        self.by_name.insert(user.username.to_ascii_lowercase(), user.id.clone());
+        self.by_name
+            .insert(user.username.to_ascii_lowercase(), user.id.clone());
         self.by_id.insert(user.id.clone(), user);
     }
 
@@ -123,17 +133,25 @@ impl Users {
         let prev = self.by_id.remove(&user.id).unwrap();
         if prev.location != user.location {
             // inform users at new location of new user
-            self.send_to_location(user.location.clone(), Arc::new(UserJoinedMessage {
-                username: user.username.clone(),
-                origin: Some(prev.location.to_string()),
-                version_idx: 0,
-            })).await;
+            self.send_to_location(
+                user.location.clone(),
+                Arc::new(UserJoinedMessage {
+                    username: user.username.clone(),
+                    origin: Some(prev.location.to_string()),
+                    version_idx: 0,
+                }),
+            )
+            .await;
 
             // inform users at previous location of user leaving
-            self.send_to_location(prev.location.clone(), Arc::new(UserLeftMessage {
-                username: user.username.clone(),
-                destination: Some(user.location.to_string()),
-            })).await;
+            self.send_to_location(
+                prev.location.clone(),
+                Arc::new(UserLeftMessage {
+                    username: user.username.clone(),
+                    destination: Some(user.location.to_string()),
+                }),
+            )
+            .await;
         }
 
         self.by_id.insert(user.id.clone(), user);
@@ -148,7 +166,8 @@ impl Users {
                     username: user.username,
                     destination: None,
                 }),
-            ).await;
+            )
+            .await;
         }
     }
 }
