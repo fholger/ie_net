@@ -1,6 +1,6 @@
 mod channel;
 mod game;
-mod user;
+pub mod user;
 
 use crate::broker::channel::Channels;
 use crate::broker::game::{Games, ALLOWED_GAME_NAME_CHARS};
@@ -414,11 +414,11 @@ pub async fn broker_loop(
 
     loop {
         tokio::select! {
-            Some(event) = events.next() => {
-                broker.handle_event(event).await?;
-            }
+            maybe_event = events.next() => match maybe_event {
+                Some(event) => broker.handle_event(event).await?,
+                None => break,
+            },
             Some(shutdown) = shutdown_recv.recv() => if shutdown { break },
-            else => break,
         }
     }
 

@@ -1,5 +1,5 @@
-use ie_net::server;
 use anyhow::Result;
+use ie_net::server;
 use structopt::StructOpt;
 
 #[derive(StructOpt, Debug)]

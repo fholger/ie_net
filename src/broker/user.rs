@@ -5,7 +5,7 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[derive(Clone, PartialEq, Hash, Eq)]
+#[derive(Clone, PartialEq, Hash, Eq, Debug)]
 pub enum Location {
     Channel { name: String },
     Game { name: String },
