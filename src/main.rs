@@ -1,12 +1,4 @@
-#[macro_use]
-extern crate nom;
-
-mod broker;
-mod client;
-mod messages;
-mod server;
-mod util;
-
+use ie_net::server;
 use anyhow::Result;
 use structopt::StructOpt;
 
