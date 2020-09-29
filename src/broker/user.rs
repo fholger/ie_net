@@ -12,11 +12,11 @@ pub enum Location {
     Nowhere,
 }
 
-impl Location {
-    pub fn to_string(&self) -> String {
+impl ToString for Location {
+    fn to_string(&self) -> String {
         match self {
-            Self::Channel { name } => format!("#{}", name).to_string(),
-            Self::Game { name } => format!("${}", name).to_string(),
+            Self::Channel { name } => format!("#{}", name),
+            Self::Game { name } => format!("${}", name),
             Self::Nowhere => "[nowhere]".to_string(),
         }
     }
@@ -34,7 +34,7 @@ pub struct User {
 
 impl User {
     pub async fn send(&mut self, message: ArcServerMessage) {
-        if let Err(_) = self.send.send(message).await {
+        if self.send.send(message).await.is_err() {
             // if this happens, it means that the user's receiver was closed
             // this should trigger an event being sent to the broker that the
             // client went away, so we'll just log and ignore the error here
@@ -49,6 +49,7 @@ impl User {
     }
 }
 
+#[derive(Default)]
 pub struct Users {
     by_id: HashMap<Uuid, User>,
     by_name: HashMap<String, Uuid>,
@@ -56,10 +57,7 @@ pub struct Users {
 
 impl Users {
     pub fn new() -> Self {
-        Self {
-            by_id: HashMap::new(),
-            by_name: HashMap::new(),
-        }
+        Default::default()
     }
 
     pub fn count(&self) -> u32 {
@@ -124,8 +122,8 @@ impl Users {
         .await;
 
         self.by_name
-            .insert(user.username.to_ascii_lowercase(), user.id.clone());
-        self.by_id.insert(user.id.clone(), user);
+            .insert(user.username.to_ascii_lowercase(), user.id);
+        self.by_id.insert(user.id, user);
     }
 
     pub async fn update(&mut self, user: User) {
@@ -158,7 +156,7 @@ impl Users {
             .await;
         }
 
-        self.by_id.insert(user.id.clone(), user);
+        self.by_id.insert(user.id, user);
     }
 
     pub async fn remove(&mut self, id: Uuid) {

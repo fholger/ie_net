@@ -109,7 +109,8 @@ impl Broker {
                 )
                 .await;
         } else {
-            user.send(ErrorMessage::new("Channel does not exist")).await;
+            user.send(ErrorMessage::new_err("Channel does not exist"))
+                .await;
         }
     }
 
@@ -134,7 +135,8 @@ impl Broker {
                 )
                 .await;
         } else {
-            user.send(ErrorMessage::new("Game does not exist")).await;
+            user.send(ErrorMessage::new_err("Game does not exist"))
+                .await;
         }
     }
 
@@ -153,9 +155,9 @@ impl Broker {
                     message,
                 }))
                 .await;
-            return;
         } else {
-            user.send(ErrorMessage::new("User does not exist")).await;
+            user.send(ErrorMessage::new_err("User does not exist"))
+                .await;
         }
     }
 
@@ -204,14 +206,15 @@ impl Broker {
 
     async fn host_game(&mut self, mut user: User, game_name: String, password_or_guid: Vec<u8>) {
         if !only_allowed_chars_not_empty(&game_name, ALLOWED_GAME_NAME_CHARS) {
-            user.send(ErrorMessage::new("Invalid game name")).await;
+            user.send(ErrorMessage::new_err("Invalid game name")).await;
             return;
         }
 
         if let Some(game) = self.games.get(&game_name) {
             let maybe_guid = Uuid::parse_str(&String::from_utf8_lossy(&password_or_guid));
             if game.status == Started || game.hosted_by != user.id || maybe_guid.is_err() {
-                user.send(ErrorMessage::new("Game already exists.")).await;
+                user.send(ErrorMessage::new_err("Game already exists."))
+                    .await;
                 return;
             }
             let status = game.status;
@@ -233,29 +236,27 @@ impl Broker {
 
     async fn join_game(&mut self, mut user: User, game_name: String, password: Vec<u8>) {
         if let Some(game) = self.games.get(&game_name) {
-            let game_version = user.game_version.clone();
+            let game_version = user.game_version;
             if let Ok(id) = Uuid::parse_str(&bytevec_to_str(&password)) {
                 if id == game.id {
                     log::info!("Client {} has joined game {}", user.id, game.name);
                     user.location = game.to_location();
                     self.users.update(user).await;
                 }
+            } else if password == game.password {
+                user.send(Arc::new(JoinGameMessage {
+                    version: game_version,
+                    game_name: game.name.clone(),
+                    password,
+                    id: game.id,
+                    ip_addr: game.host_ip,
+                }))
+                .await;
             } else {
-                if password == game.password {
-                    user.send(Arc::new(JoinGameMessage {
-                        version: game_version,
-                        game_name: game.name.clone(),
-                        password,
-                        id: game.id.clone(),
-                        ip_addr: game.host_ip.clone(),
-                    }))
-                    .await;
-                } else {
-                    user.send(Arc::new(ErrorMessage {
-                        error: "Invalid password".to_string(),
-                    }))
-                    .await;
-                }
+                user.send(Arc::new(ErrorMessage {
+                    error: "Invalid password".to_string(),
+                }))
+                .await;
             }
         } else {
             user.send(Arc::new(ErrorMessage {
@@ -317,7 +318,7 @@ impl Broker {
             send,
         };
 
-        if let Some(_) = self.users.by_username(&user.username) {
+        if self.users.by_username(&user.username).is_some() {
             log::info!(
                 "A client with username {} is already logged in, dropping client",
                 user.username

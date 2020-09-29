@@ -39,7 +39,7 @@ impl Game {
 
     pub fn to_new_game_message(&self) -> ArcServerMessage {
         Arc::new(NewGameMessage {
-            id: self.id.clone(),
+            id: self.id,
             game_name: self.name.clone(),
         })
     }
@@ -85,19 +85,19 @@ impl Games {
             name
         );
         let game = Game {
-            hosted_by: user.id.clone(),
-            host_ip: user.ip_addr.clone(),
+            hosted_by: user.id,
+            host_ip: user.ip_addr,
             name: name.to_string(),
             password: password.to_vec(),
             status: Requested,
             id: Uuid::from_u128(0),
-            game_version: user.game_version.clone(),
+            game_version: user.game_version,
             created_at: Instant::now(),
         };
         user.send(Arc::new(CreateGameMessage {
             game_name: game.name.clone(),
             password: game.password.clone(),
-            version: game.game_version.clone(),
+            version: game.game_version,
             id: Uuid::new_v4(),
         }))
         .await;
@@ -135,11 +135,12 @@ impl Games {
         let empty_games: Vec<String> = self
             .by_name
             .values()
-            .filter_map(|g| match g.status {
-                Requested if g.created_at.elapsed() > Duration::new(10, 0) => Some(g),
-                Open if !occupied_locations.contains(&g.to_location()) => Some(g),
-                Started if !occupied_locations.contains(&g.to_location()) => Some(g),
-                _ => None,
+            .filter(|g| {
+                if g.status == Requested {
+                    g.created_at.elapsed() > Duration::new(30, 0)
+                } else {
+                    !occupied_locations.contains(&g.to_location())
+                }
             })
             .map(|g| g.name.clone())
             .collect();

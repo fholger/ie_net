@@ -32,9 +32,11 @@ enum LoginStatus {
 pub async fn client_handler(stream: TcpStream, mut broker: EventSender) -> Result<()> {
     let ip_addr = match stream.peer_addr()?.ip() {
         IpAddr::V4(ipv4) => ipv4,
-        IpAddr::V6(_) => Err(anyhow::anyhow!(
-            "IPv6 connections are incompatible with the game"
-        ))?,
+        IpAddr::V6(_) => {
+            return Err(anyhow::anyhow!(
+                "IPv6 connections are incompatible with the game"
+            ))
+        }
     };
     let (mut stream_read, stream_write) = stream.into_split();
     let (client_sender, client_receiver) = mpsc::channel(64);
@@ -94,7 +96,7 @@ async fn process_messages(
     broker: &mut EventSender,
     mut login_status: LoginStatus,
 ) -> Result<LoginStatus> {
-    while received.len() > 0 {
+    while !received.is_empty() {
         let initially_available = received.len();
         login_status = match login_status {
             Connected { send } => process_ident(received, send).await?,
@@ -150,7 +152,7 @@ async fn process_login(
                         id: client_id,
                         game_version,
                         send,
-                        ip_addr: ip_addr.clone(),
+                        ip_addr: *ip_addr,
                         username,
                     })
                     .await?;

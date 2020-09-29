@@ -109,7 +109,7 @@ pub struct RawMessage {
 fn escape_quotes(input: &[u8]) -> Vec<u8> {
     let mut result = Vec::with_capacity(input.len() + 8);
     for b in input {
-        if *b == '"' as u8 {
+        if *b == b'"' {
             result.extend_from_slice(b"%22");
         } else {
             result.push(*b);
@@ -122,17 +122,17 @@ fn prepare_command(command: &str, params: &[&[u8]]) -> Vec<u8> {
     let mut result = Vec::new();
     result.extend_from_slice(command.as_ref());
     for param in params {
-        result.push(' ' as u8);
-        result.push('"' as u8);
+        result.push(b' ');
+        result.push(b'"');
         result.append(&mut escape_quotes(param));
-        result.push('"' as u8);
+        result.push(b'"');
     }
     result.push(0);
     result
 }
 
 impl ErrorMessage {
-    pub fn new(error: &str) -> ArcServerMessage {
+    pub fn new_err(error: &str) -> ArcServerMessage {
         Arc::new(ErrorMessage {
             error: error.to_string(),
         })
@@ -143,7 +143,7 @@ impl ServerMessage for SendMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         Ok(prepare_command(
             "/send",
-            &vec![self.username.as_bytes(), &self.message],
+            &[self.username.as_bytes(), &self.message],
         ))
     }
 }
@@ -152,7 +152,7 @@ impl ServerMessage for PrivateMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         Ok(prepare_command(
             "/msg",
-            &vec![
+            &[
                 self.location.as_bytes(),
                 self.from.as_bytes(),
                 self.to.as_bytes(),
@@ -166,14 +166,14 @@ impl ServerMessage for SentPrivateMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         Ok(prepare_command(
             "/msgc",
-            &vec![self.to.as_bytes(), &self.message],
+            &[self.to.as_bytes(), &self.message],
         ))
     }
 }
 
 impl ServerMessage for ErrorMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
-        Ok(prepare_command("/error", &vec![self.error.as_bytes()]))
+        Ok(prepare_command("/error", &[self.error.as_bytes()]))
     }
 }
 
@@ -182,7 +182,7 @@ impl ServerMessage for NewChannelMessage {
         Ok(prepare_command(
             "/$channel",
             // TODO: what is the second parameter? game/lang version?
-            &vec![self.channel_name.as_bytes(), b"0"],
+            &[self.channel_name.as_bytes(), b"0"],
         ))
     }
 }
@@ -191,17 +191,14 @@ impl ServerMessage for DropChannelMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         Ok(prepare_command(
             "/&channel",
-            &vec![self.channel_name.as_bytes()],
+            &[self.channel_name.as_bytes()],
         ))
     }
 }
 
 impl ServerMessage for NewUserMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
-        Ok(prepare_command(
-            "$user",
-            &vec![self.username.as_bytes(), b"0"],
-        ))
+        Ok(prepare_command("$user", &[self.username.as_bytes(), b"0"]))
     }
 }
 
@@ -228,10 +225,7 @@ impl ServerMessage for UserLeftMessage {
 
 impl ServerMessage for JoinChannelMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
-        Ok(prepare_command(
-            "/join",
-            &vec![self.channel_name.as_bytes()],
-        ))
+        Ok(prepare_command("/join", &[self.channel_name.as_bytes()]))
     }
 }
 
@@ -239,7 +233,7 @@ impl ServerMessage for CreateGameMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         Ok(prepare_command(
             "/plays",
-            &vec![
+            &[
                 self.version.to_hyphenated().to_string().as_bytes(),
                 self.game_name.as_bytes(),
                 self.password.as_bytes(),
@@ -260,7 +254,7 @@ impl ServerMessage for JoinGameMessage {
             .fold(0u32, |x, y| (x << 8) + (*y as u32));
         Ok(prepare_command(
             "/playc",
-            &vec![
+            &[
                 self.version.to_hyphenated().to_string().as_bytes(),
                 self.game_name.as_bytes(),
                 self.password.as_bytes(),
@@ -277,7 +271,7 @@ impl ServerMessage for NewGameMessage {
         // TODO: what do all these extra params actually mean?
         Ok(prepare_command(
             "/$play",
-            &vec![
+            &[
                 self.game_name.as_bytes(),
                 b"0",
                 b"0",
@@ -291,7 +285,7 @@ impl ServerMessage for NewGameMessage {
 
 impl ServerMessage for DropGameMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
-        Ok(prepare_command("/&play", &vec![self.game_name.as_bytes()]))
+        Ok(prepare_command("/&play", &[self.game_name.as_bytes()]))
     }
 }
 
@@ -299,7 +293,7 @@ impl ServerMessage for SyncStatsMessage {
     fn prepare_message(&self) -> Result<Vec<u8>> {
         Ok(prepare_command(
             "/syncstats",
-            &vec![
+            &[
                 format!("{}", self.users_total).as_bytes(),
                 format!("{}", self.users_online).as_bytes(),
                 format!("{}", self.channels_total).as_bytes(),
