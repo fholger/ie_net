@@ -8,26 +8,59 @@ use tokio::signal;
 use tokio::stream::StreamExt;
 use tokio::sync::{mpsc, watch};
 use tokio::task;
+use tokio::task::JoinHandle;
 
 pub async fn run(addr: String) -> Result<()> {
     let (shutdown_send, shutdown_recv) = watch::channel(false);
 
     let (broker_sender, broker_receiver) = mpsc::channel(256);
-    let broker_handle = spawn_and_log_error(
+    let mut broker_handle = spawn_and_log_error(
         broker_loop(broker_receiver, shutdown_recv.clone()),
         "broker_loop",
     );
-    let accept_handle = spawn_and_log_error(
+    let mut accept_handle = spawn_and_log_error(
         accept_loop(addr, shutdown_recv.clone(), broker_sender),
         "accept_loop",
     );
 
-    signal::ctrl_c().await?;
-    log::info!("Received Ctrl-C event, shutting down");
+    let result = shutdown_watch(&mut accept_handle, &mut broker_handle).await;
+    log::info!("Shutting down server");
     shutdown_send.broadcast(true)?;
     accept_handle.await?;
     broker_handle.await?;
 
+    result
+}
+
+async fn shutdown_watch(
+    accept_handle: &mut JoinHandle<()>,
+    broker_handle: &mut JoinHandle<()>,
+) -> Result<()> {
+    tokio::select! {
+        result = accept_handle => result?,
+        result = broker_handle => result?,
+        result = signal_watch() => {
+            log::info!("Received shutdown signal");
+            result?
+        }
+    };
+    Ok(())
+}
+
+#[cfg(target_family = "windows")]
+async fn signal_watch() -> Result<()> {
+    Ok(signal::ctrl_c().await?)
+}
+
+#[cfg(target_family = "unix")]
+async fn signal_watch() -> Result<()> {
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        result = signal::ctrl_c() => result?,
+        _ = sighup.recv() => (),
+        _ = sigterm.recv() => (),
+    }
     Ok(())
 }
 
