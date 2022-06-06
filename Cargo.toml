@@ -19,7 +19,7 @@ path = "src/main.rs"
 bytes = "0.5"
 anyhow = "1.0"
 libflate = "1.0"
-tokio = { version = "0.2", features = ["full"] }
+tokio = { version = "1.8", features = ["full"] }
 log = "0.4"
 flexi_logger = "0.15"
 structopt = "0.3"
